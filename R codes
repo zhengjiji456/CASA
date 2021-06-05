@@ -1,0 +1,5205 @@
+NOTE: the R codes provided here were modified from https://mp.weixin.qq.com/s/4Lj8g7UPx-YXLhdZOEe9bg(Author: Gou mengmeng 勾蒙蒙)
+
+###########################################################################################################
+# NDVI-250m 下载及整理
+# step1:download data from NASA
+install.packages("MODIStsp")
+library(MODIStsp)
+MODIStsp()
+#username:
+#password:
+#MODIS tile:h27v05-h28v05-h27v06-h28v06
+###############################
+
+# step2:data preparation
+#HDF格式转TIFF格式 (MODIStsp中完成)
+
+
+#TIFF的坐标转换及裁剪（实际是在arcgis pro 中完成）
+##加载程序包
+packages<-c("raster","rgdal","maptools","sp","gstat","tcltk","plotKML","gtools")
+lapply(packages,FUN=function(X){do.call("library",list(X))})
+setwd("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI")
+dir.create("mask-NDVI")##新建导出的目录的文件夹
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+#plot(China.shp)
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+rm(China.shp,HHJ.shp)
+newfiles<-dir("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/2000",pattern=".tif")##提取已经获得的NDVI.tif数据
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+
+######
+
+##设置投影转换 （实际是在arcgis pro 中完成，批量转换）
+##剪裁循环 （实际是在arcgis pro 中完成，未除以10000，未去除0）
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  NDVITIF<-(raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/2000","/",newfiles[i],sep=""),value=TRUE))/10000##读取NDVI-tif数据，并除以10000（因为HDF-tif格式转换过程中数值发生变化）
+  NDVI<-reproject(NDVITIF,"+proj=longlat +datum=WGS84 +no_defs")##地理坐标转投影坐标
+  bound_raster<-rasterize(bound,NDVI,fun='first')##将bound转为栅格
+  mask<-mask(NDVI,bound_raster)##进行掩膜提取，后面的*1目的是用于栅格数据的统计
+  mask[mask<0]<-0##因为NDVI范围为0-1，对剪裁后的数据中NDVI<0的数据进行空值处理
+  name=paste("NDVI_250m","-",newfiles[i])##设置导出的NDVI的名称（new+NDVI+日期+.tif）
+  setwd("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/mask-NDVI")##设置导出的目录
+  writeRaster(mask,filename=name,"GTiff",overwrite=TRUE)##将数据进行导出
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+
+###############################NDVI最大值合成######################################
+############################### year by year ######################################
+
+library(tcltk)##加载程序包
+library(raster)
+library(stringr)##加载字符串处理包，用于筛选出的字符串与file中所含的字符串对应
+setwd("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI")
+dir.create("NDVI_month/2000")##新建导出目录的文件夹
+dir.create("NDVI_month/2001")
+dir.create("NDVI_month/2002")
+dir.create("NDVI_month/2003")
+dir.create("NDVI_month/2004")
+dir.create("NDVI_month/2005")
+dir.create("NDVI_month/2006")
+dir.create("NDVI_month/2007")
+dir.create("NDVI_month/2008")
+dir.create("NDVI_month/2009")
+dir.create("NDVI_month/2010")
+dir.create("NDVI_month/2011")
+dir.create("NDVI_month/2012")
+dir.create("NDVI_month/2013")
+dir.create("NDVI_month/2014")
+dir.create("NDVI_month/2015")
+dir.create("NDVI_cut/2000")##新建导出目录的文件夹
+dir.create("NDVI_cut/2001")
+dir.create("NDVI_cut/2002")
+dir.create("NDVI_cut/2003")
+dir.create("NDVI_cut/2004")
+dir.create("NDVI_cut/2005")
+dir.create("NDVI_cut/2006")
+dir.create("NDVI_cut/2007")
+dir.create("NDVI_cut/2008")
+dir.create("NDVI_cut/2009")
+dir.create("NDVI_cut/2010")
+dir.create("NDVI_cut/2011")
+dir.create("NDVI_cut/2012")
+dir.create("NDVI_cut/2013")
+dir.create("NDVI_cut/2014")
+dir.create("NDVI_cut/2015")
+
+###################################### 2000 ####################################################
+files<-dir("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2000",pattern=".tif")
+fileday<-data.frame(matrix(as.numeric(substr(files,53,55)),length(files),1))##start:53,stop:55,提取名称中的日期（指的是“日”）、将字符串数据转成数字型数据框length(files)行，1列
+colnames(fileday)<-c("day")##设置列名
+##设置新的月日（1:365天对应到12个月份中）
+date<-data.frame(day<-rep(1:365))##设置一年的365天
+date$month<-with(date,format(strptime(paste(day),format="%j"),'%m'))##获取天数对应的月份
+colnames(date)<-c("day","month")##重新设置列名
+subsetmonth<-merge(fileday,date)##经过merge后获得NDVI中的日期所在的月份
+
+
+###加入进度条
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+
+###开始最大值合成的循环
+for (i in 1:12)
+{
+  info<-sprintf("已完成 %d%%",round(i*100/12))
+  subset<-subset(subsetmonth,month==unique(subsetmonth[,2])[i])$day##筛选出month为几月份时对应的天数，即用哪几个日期构造固定月份的最大值提取；里面包含月份唯一值的确定
+  number<-str_pad(subset,3,pad="0")##设置字符串个数3个，里面的数字均为0**格式
+  if (length(number)-1>0)
+  {
+    location1<-grep(number[1],files)
+    location2<-grep(number[2],files)
+    raster<-max(stack(raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2000","/",files[location1],sep="")),raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2000","/",files[location2],sep=""))))
+  }
+  else
+  {
+    raster<-raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2000","/",files[location1],sep=""))
+  }
+  setwd("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_month/2000")##重新设置工作目录
+  name=paste("NDVI_2000",unique(subsetmonth[,2])[i],sep="")##设置导出的名称
+  raster[raster<0]<-0
+  raster<-raster/10000
+  writeRaster(raster,filename=name,"GTiff",overwrite=TRUE)##将数据进行导出
+  setTkProgressBar(pb,value=i*100/12,title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+###########################################################################################################
+
+###################################### 2001-2015 ####################################################
+files<-dir("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2001",pattern=".tif")
+fileday<-data.frame(matrix(as.numeric(substr(files,53,55)),length(files),1))##start:53,stop:55,提取名称中的日期（指的是“日”）、将字符串数据转成数字型数据框length(files)行，1列
+colnames(fileday)<-c("day")##设置列名
+##设置新的月日（1:365天对应到12个月份中）
+date<-data.frame(day<-rep(1:365))##设置一年的365天
+date$month<-with(date,format(strptime(paste(day),format="%j"),'%m'))##获取天数对应的月份
+colnames(date)<-c("day","month")##重新设置列名
+subsetmonth<-merge(fileday,date)##经过merge后获得NDVI中的日期所在的月份
+
+
+###加入进度条
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+
+###开始最大值合成的循环
+for (i in 1:12)
+{
+  info<-sprintf("已完成 %d%%",round(i*100/12))
+  subset<-subset(subsetmonth,month==unique(subsetmonth[,2])[i])$day##筛选出month为几月份时对应的天数，即用哪几个日期构造固定月份的最大值提取；里面包含月份唯一值的确定
+  number<-str_pad(subset,3,pad="0")##设置字符串个数3个，里面的数字均为0**格式
+  if (length(number)-1>0)
+  {
+    location1<-grep(number[1],files)
+    location2<-grep(number[2],files)
+    raster<-max(stack(raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2001","/",files[location1],sep="")),raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2001","/",files[location2],sep=""))))
+  }
+  else
+  {
+    raster<-raster(paste("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_cut/2001","/",files[location1],sep=""))
+  }
+  setwd("D:/MODIS_NDVI_250m/VI_16Days_250m_v6/NDVI/NDVI_month/2001")##重新设置工作目录
+  name=paste("NDVI_2005",unique(subsetmonth[,2])[i],sep="")##设置导出的名称
+  raster[raster<0]<-0
+  raster<-raster/10000
+  writeRaster(raster,filename=name,"GTiff",overwrite=TRUE)##将数据进行导出
+  setTkProgressBar(pb,value=i*100/12,title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+rm(list = ls())
+gc()
+###########################################################################################################
+
+
+
+###########################################################################################################
+
+####500m ndvi 现有数据集的整理
+library(terra)
+library(raster)
+library(rgdal)
+library(maptools)
+library(sp)
+library(gstat)
+library(tcltk)
+library(plotKML)
+packages<-c("raster","rgdal","maptools","sp","gstat","tcltk","plotKML")
+lapply(packages,FUN=function(X){do.call("library",list(X))})
+setwd("D:/GeoSpatialDataCloud/NDVI500m")
+#dir.create("mask-NDVI")##新建导出的目录的文件夹
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+#plot(China.shp)
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+#plot(HHJ.shp)
+bound<-HHJ.shp
+#bound_raster<-raster("D:/GIS/DEM/dem HHJ.tif")
+newfiles<-dir("D:/GeoSpatialDataCloud/NDVI500m",pattern=".tif")##提取已经获得的NDVI.tif数据
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+
+#剪裁循环
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  NDVITIF<-(raster(paste("D:/GeoSpatialDataCloud/NDVI500m","/",newfiles[i],sep=""),value=TRUE))
+  bound_raster<-rasterize(bound,NDVITIF,fun='first')##将bound转为栅格
+  mask<-mask(NDVITIF,bound_raster)##进行掩膜提取，后面的*1目的是用于栅格数据的统计
+  mask[mask<0]<-0##因为NDVI范围为0-1，对剪裁后的数据中NDVI<0的数据进行空值处理
+  name=paste("new","-",newfiles[i])##设置导出的NDVI的名称（new+NDVI+日期+.tif）
+  setwd(path<-"D:/GeoSpatialDataCloud/NDVI500m/mask-NDVI")##设置导出的目录
+  writeRaster(mask,filename=name,"GTiff",overwrite=TRUE)##将数据进行导出
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+
+
+
+####HDF格式转TIFF格式（失败）
+##文件的整理环节(略)
+dir.create("TIF-PAR")##创建一个新的文件夹（TIF-PAR）
+path<-"E:/MODIS2015"##查看路径
+newfiles<-dir(path,pattern=".tif")##查看路径中所有的.tif文件
+file.copy(newfiles,"TIF-NDVI")##将所有.tif文件复制进入TIF-NDVI文件夹
+file.remove(newfiles)##删除原有路径中所有.tif
+
+
+
+
+#### day PRE ####
+#### day TEM ####
+library(readr)
+TEM <- read_table2("D:/Climate_data_day_site - 副本/TEM/TEM.txt")
+length(unique(TEM$year))
+summary(TEM$year)
+##method 1
+TEM2 <- subset(TEM[,1:10]) #new<-subset(x,a>=14,select=a:f)
+rm(TEM)
+TEM00_15 <- TEM2[which(TEM2$year%in%c(2000:2015)),]
+summary(TEM00_15$year)
+##method 2 suggested
+TEM00_15 <- subset(TEM,year%in%c(2000:2015),select=ID:Tmin)
+summary(TEM00_15$year)
+rm(TEM)
+TEM00_15$lat<-(((TEM00_15$lat/100)-(trunc(TEM00_15$lat/100,2)))*100/60)+trunc(TEM00_15$lat/100,2)
+TEM00_15$long<-(((TEM00_15$long/100)-(trunc(TEM00_15$long/100,2)))*100/60)+trunc(TEM00_15$long/100,2)
+TEM00_15$elevation<-TEM00_15$elevation*0.1
+TEM00_15$Tmean<-TEM00_15$Tmean*0.1
+TEM00_15$Tmax<-TEM00_15$Tmax*0.1
+TEM00_15$Tmin<-TEM00_15$Tmin*0.1
+length(unique(TEM00_15$Tmean==32700))
+length(unique(TEM00_15$Tmean==32766))
+
+
+##辐射数据准备
+#### 方法（一）download/prepare radiation datasets 2000-2015 ####
+library("XML")
+library("stringr")
+library("RCurl")
+library("urltools")
+library(plyr)
+
+setwd("D:/Climate_data_mon_site_radiation/tool")
+download<-read.table("mon2000_2015.txt",sep=" ")
+filenames<-unlist(download)
+for (i in 1:length(filenames))
+{
+  outputname<-str_extract(paste(filenames[i]),"[MON]{3}-[0-9]{6}+(?=.TXT)")
+  filepath<-getwd()
+  download.file(paste(filenames)[i],paste(getwd(),"/",outputname,".txt",sep=""))
+}
+
+setwd("D:/Climate_data_mon_site_radiation/tool/try")
+filelist<-list.files(pattern=".*.txt")
+datalist<-lapply(filelist,function(x) read.table(x,header=F))
+
+#newdata<-do.call("rbind",datalist[1:18])# QC code
+newdata<-ldply(datalist,data.frame)
+newdata<-newdata[,1:12]
+colnames(newdata)<-c("Plot","Y","X","Elevation","Year","Month","总辐射","净辐射","散射辐射",
+                     "水平面直接辐射","反射辐射月总量","垂直面直接辐射月总量")
+newdata[,4]<-newdata[,4]*0.1
+newdata[,c(7:12)]<-newdata[,c(7:12)]*0.01
+newdata$Y<-(((newdata$Y/100)-(trunc(newdata$Y/100,2)))*100/60)+trunc(newdata$Y/100,2)
+newdata$X<-(((newdata$X/100)-(trunc(newdata$X/100,2)))*100/60)+trunc(newdata$X/100,2)
+
+write.csv(newdata,"全国辐射.csv",row.names=F)##导出全国辐射数据
+
+##插值
+setwd("D:/CASA/data_proceed")#（整理时原辐射数据已复制到radiation文件夹中）
+library(raster)
+library(sp)
+library(rgdal)
+library(gstat)
+library(maptools)
+library(fields)
+##HHJ.shp
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+shape<-bound #see code above
+blank_raster<-raster(nrow=1000,ncol=1000,extent(shape))
+values(blank_raster)<-1
+bound<-rasterize(shape,blank_raster)
+grd<-as(bound,"SpatialGridDataFrame")
+coord<-coordinates(grd)
+grd$X<-coord[,1]
+grd$Y<-coord[,2]
+
+
+library(tcltk)
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+##构造选择函数及批量插值
+year<-rep(c(2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015),each=12)#构造年份数据，each表示每年12个月
+month<-rep(1:12,16)#构造月份数据
+date<-cbind(year,month)#合并数据
+for (i in 1:length(year))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(year)))
+  selection<-date[i,]
+  newdata2<-subset(newdata,Year==selection[1]&Month==selection[2])#选择数据函数
+  coordinates(newdata2)<-c("X","Y")#定义数据的X、Y坐标
+  proj4string(newdata2)<-CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")#定义空间参考
+  m<-Tps(coordinates(newdata2),newdata2$总辐射)##样条函数插值
+  tps<-interpolate(bound,m)
+  vr<-mask(tps,bound)#掩膜提取
+  name<-paste(selection[1],"-",selection[2])#构造导出数据的名称
+  writeRaster(vr,filename=name,"GTiff",overwrite=TRUE)#数据导出
+  setTkProgressBar(pb,value=i*100/length(year),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+#########################################################################################
+#### 方法（二）中国光合有效辐射重建数据集####
+setwd("D:/国家综合地球观测数据共享平台/中国光合有效辐射重构数据集1961-2014/PAR")
+filelist<-list.files(pattern=".*.txt") 
+for (i in (1 : length(filelist)))
+{
+  df<-read.table(paste(filelist[i]),header=F)
+  #filename<-paste(filelist[i])
+  name<-str_extract(paste(filelist[i]),"[0-9]{5}+")
+  colnames(df)<-c("Year","Month","Day","Par")
+  df$ID<-name
+  write.csv(df,paste(name,".csv",seq=""),row.names = F)
+}
+filelist<-list.files(pattern=".*.csv")
+datalist<-lapply(filelist,function(x) read.csv(x))
+newdata<-ldply(datalist,data.frame)
+library(plyr)
+groupColumns=c("ID","Year","Month")
+PARmon<-ddply(newdata,groupColumns,function(x)
+  colSums(x[paste(colnames(newdata))[4]])) #units:mol/m2/d
+#1w=1J/s=0.001KJ/s=0.001*3600*24KJ/d,则1w/m2=0.001*3600*24KJ/d/m2=3.6*24KJ/d/m2=0.0864MJ/m2/d
+#https://www.researchgate.net/post/Can_I_convert_PAR_photo_active_radiation_value_of_micro_mole_M2_S_to_Solar_radiation_in_Watt_m22 中 1 W/m2 ≈ 4.6 μmol/m2/s,则1mol/m2/d = 0.217 MJ/m2/d
+PARmon$ParMJ<-PARmon$Par*0.217 # units:MJ/m2
+library(readxl)
+station <- read_excel("STATION.xlsx")
+PARmon2<-merge(PARmon,station,all.x=TRUE)
+write.csv(PARmon2,"PARmon.csv",row.names = F)
+PARmon0015<-PARmon2[which(PARmon2$Year>1999),]
+write.csv(PARmon0015,"PARmon0015.csv",row.names = F)
+
+##插值
+setwd("D:/CASA/data_proceed")#（整理时原辐射数据已复制到radiation文件夹中）
+library(raster)
+library(sp)
+library(rgdal)
+library(gstat)
+library(maptools)
+library(fields)
+##HHJ.shp
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+shape<-bound #see code above
+blank_raster<-raster(nrow=1000,ncol=1000,extent(shape))
+values(blank_raster)<-1
+bound<-rasterize(shape,blank_raster)
+grd<-as(bound,"SpatialGridDataFrame")
+coord<-coordinates(grd)
+grd$X<-coord[,1]
+grd$Y<-coord[,2]
+
+setwd("D:/CASA/data_proceed/PAR")
+library(tcltk)
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+##构造选择函数及批量插值
+year<-rep(c(2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2014),each=12)#构造年份数据，each表示每年12个月
+month<-rep(1:12,15)#构造月份数据
+date<-cbind(year,month)#合并数据
+for (i in 1:length(year))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(year)))
+  selection<-date[i,]
+  newdata<-subset(PARmon0015,Year==selection[1]&Month==selection[2])#选择数据函数
+  coordinates(newdata)<-c("long","lat")#定义数据的X、Y坐标
+  proj4string(newdata)<-CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")#定义空间参考
+  m<-Tps(coordinates(newdata),newdata$ParMJ)##样条函数插值
+  tps<-interpolate(bound,m)
+  vr<-mask(tps,bound)#掩膜提取
+  name<-paste(selection[1],"-",selection[2])#构造导出数据的名称
+  writeRaster(vr,filename=name,"GTiff",overwrite=TRUE)#数据导出
+  setTkProgressBar(pb,value=i*100/length(year),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+#par 2015
+par201201<-raster("2012 - 1.tif")
+par201202<-raster("2012 - 2.tif")
+par201203<-raster("2012 - 3.tif")
+par201204<-raster("2012 - 4.tif")
+par201205<-raster("2012 - 5.tif")
+par201206<-raster("2012 - 6.tif")
+par201207<-raster("2012 - 7.tif")
+par201208<-raster("2012 - 8.tif")
+par201209<-raster("2012 - 9.tif")
+par201210<-raster("2012 - 10.tif")
+par201211<-raster("2012 - 11.tif")
+par201212<-raster("2012 - 12.tif")
+par201301<-raster("2013 - 1.tif")
+par201302<-raster("2013 - 2.tif")
+par201303<-raster("2013 - 3.tif")
+par201304<-raster("2013 - 4.tif")
+par201305<-raster("2013 - 5.tif")
+par201306<-raster("2013 - 6.tif")
+par201307<-raster("2013 - 7.tif")
+par201308<-raster("2013 - 8.tif")
+par201309<-raster("2013 - 9.tif")
+par201310<-raster("2013 - 10.tif")
+par201311<-raster("2013 - 11.tif")
+par201312<-raster("2013 - 12.tif")
+par201401<-raster("2014 - 1.tif")
+par201402<-raster("2014 - 2.tif")
+par201403<-raster("2014 - 3.tif")
+par201404<-raster("2014 - 4.tif")
+par201405<-raster("2014 - 5.tif")
+par201406<-raster("2014 - 6.tif")
+par201407<-raster("2014 - 7.tif")
+par201408<-raster("2014 - 8.tif")
+par201409<-raster("2014 - 9.tif")
+par201410<-raster("2014 - 10.tif")
+par201411<-raster("2014 - 11.tif")
+par201412<-raster("2014 - 12.tif")
+
+par201501<-(par201201+par201301+par201401)/3
+par201502<-(par201202+par201302+par201402)/3
+par201503<-(par201203+par201303+par201403)/3
+par201504<-(par201204+par201304+par201404)/3
+par201505<-(par201205+par201305+par201405)/3
+par201506<-(par201206+par201306+par201406)/3
+par201507<-(par201207+par201307+par201407)/3
+par201508<-(par201208+par201308+par201408)/3
+par201509<-(par201209+par201309+par201409)/3
+par201510<-(par201210+par201310+par201410)/3
+par201511<-(par201211+par201311+par201411)/3
+par201512<-(par201212+par201312+par201412)/3
+
+par201501<-writeRaster(par201501,filename="2015 - 1.tif","GTiff",overwrite=TRUE)
+par201502<-writeRaster(par201502,filename="2015 - 2.tif","GTiff",overwrite=TRUE)
+par201503<-writeRaster(par201503,filename="2015 - 3.tif","GTiff",overwrite=TRUE)
+par201504<-writeRaster(par201504,filename="2015 - 4.tif","GTiff",overwrite=TRUE)
+par201505<-writeRaster(par201505,filename="2015 - 5.tif","GTiff",overwrite=TRUE)
+par201506<-writeRaster(par201506,filename="2015 - 6.tif","GTiff",overwrite=TRUE)
+par201507<-writeRaster(par201507,filename="2015 - 7.tif","GTiff",overwrite=TRUE)
+par201508<-writeRaster(par201508,filename="2015 - 8.tif","GTiff",overwrite=TRUE)
+par201509<-writeRaster(par201509,filename="2015 - 9.tif","GTiff",overwrite=TRUE)
+par201510<-writeRaster(par201510,filename="2015 - 10.tif","GTiff",overwrite=TRUE)
+par201511<-writeRaster(par201511,filename="2015 - 11.tif","GTiff",overwrite=TRUE)
+par201512<-writeRaster(par201512,filename="2015 - 12.tif","GTiff",overwrite=TRUE)
+
+#########################################################################################
+
+
+
+
+#### Tem Water factors ##############################################################################################################
+
+## MONTH 自己整理的代码
+## 目标：计算逐月的水分限制因子与温度限制因子，基础数据来源于逐日的数据，而辐射数据是逐月数据
+
+## step1 数据导入及整理
+EVP<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/EVP_00_15.txt", sep="")
+#EVP<-EVP[,1:8]
+GST<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/GST_00_15.txt", sep="")
+#GST<-GST[,1:8]
+PRE<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/PRE_00_15.txt", sep="")
+#PRE<-PRE[,1:10]
+PRS<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/PRS_00_15.txt", sep="")
+#PRS<-PRS[,1:8]
+RHU<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/RHU_00_15.txt", sep="")
+#RHU<-RHU[,1:8]
+SSD<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/SSD_00_15.txt", sep="")
+#SSD<-SSD[,1:8]
+TEM<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/TEM_00_15.txt", sep="")
+#TEM<-TEM[,1:10]
+WIN<- read.csv("D:/Climate_data_day_site - 副本/Climate_00-15/WIN_00_15.txt", sep="")
+#WIN<-WIN[,1:8]
+#try<-cbind(EVP,GST,PRE,PRS,RHU,SSD,TEM,WIN)
+#View(try)
+#rm(try)
+climate00_15<-cbind(TEM[,1:10],PRE[,10],SSD[,8],RHU[,8],EVP[,8],GST[,8],WIN[,8],PRS[,8])
+colnames(climate00_15)<-c("ID","lat","long","elevation","year","mon","day","Tmean","Tmax","Tmin","Pre","Hour","RHU","Evp","GST","Wind","Prs")
+rm(EVP,GST,PRE,PRS,RHU,SSD,TEM,WIN)
+climate00_15[climate00_15==32700]<-0
+climate00_15[climate00_15==32766]<-0
+climate00_15[climate00_15==32744]<-0
+climate00_15$lat<-(((climate00_15$lat/100)-(trunc(climate00_15$lat/100,2)))*100/60)+trunc(climate00_15$lat/100,2)
+climate00_15$long<-(((climate00_15$long/100)-(trunc(climate00_15$long/100,2)))*100/60)+trunc(climate00_15$long/100,2)
+climate00_15$elevation<-climate00_15$elevation*0.1
+climate00_15$Wind<-climate00_15$Wind*0.1
+climate00_15$GST<-climate00_15$GST*0.1
+climate00_15$Hour<-climate00_15$Hour*0.1
+climate00_15$Evp<-climate00_15$Evp*0.1
+climate00_15$Pre<-climate00_15$Pre*0.1
+climate00_15$Tmean<-climate00_15$Tmean*0.1
+climate00_15$Tmax<-climate00_15$Tmax*0.1
+climate00_15$Tmin<-climate00_15$Tmin*0.1
+climate00_15$Prs<-climate00_15$Prs*0.1
+
+
+## step2 计算潜在蒸发散
+## 公式来源：https://wenku.baidu.com/view/3d04b1f9284ac850ac024219.html; 净辐射公式参考文献 中国地表净辐射推算方法的研究 
+climate00_15$sun_rad<-0.409*sin(0.0172*climate00_15$day-1.39)#日倾角
+climate00_15$Ws_rad<-acos(-tan(climate00_15$lat*pi/180)*tan(climate00_15$sun_rad))#日照时数角
+climate00_15$HourMax<-7.64*climate00_15$Ws_rad#日可能最大日照时数
+climate00_15$dr<-1+0.033*cos(2*pi*climate00_15$day/365)#日地相对距离
+climate00_15$Ra<-37.6*climate00_15$dr*(climate00_15$Ws_rad*sin(climate00_15$lat*pi/180)*sin(climate00_15$sun_rad)+sin(climate00_15$Ws_rad)*cos(climate00_15$lat*pi/180)*cos(climate00_15$sun_rad))#天文辐射 MJ/m2d
+#最高水汽压
+climate00_15$emax<-0.611*exp(17.27*(climate00_15$Tmax)/((climate00_15$Tmax)+237.3))
+#最低温水汽压
+climate00_15$emin<-0.611*exp(17.27*(climate00_15$Tmin)/((climate00_15$Tmin)+237.3))
+#饱和水汽压 kpa
+climate00_15$ea<-(climate00_15$emax+climate00_15$emin)/2
+#实际水汽压 kpa
+climate00_15$ed<-(climate00_15$RHU)/((50/climate00_15$emin)+(50/climate00_15$emax))
+#饱和水汽压与温度之间关系曲线斜率
+climate00_15$Rate<-(4098*climate00_15$ea)/(((climate00_15$Tmean)+237.2)^2)
+#净辐射 MJ/m2d Penman-Monteith note: Tmax Tmin 应为月值??
+climate00_15$Rn<-0.77*(0.25+0.5*climate00_15$Hour/climate00_15$HourMax)*climate00_15$Ra-2.45*(10^-9)*(((climate00_15$Tmax+273.15)^4)-((climate00_15$Tmin)^4+273.15))*(0.34-0.14*sqrt(climate00_15$ed))*(1.35*(0.25+0.5*climate00_15$Hour/climate00_15$HourMax)/(0.75+2*climate00_15$elevation*10^-5)-0.35)
+#计算2米高处的风速
+climate00_15$W2<-4.87*climate00_15$Wind/(log((67.8*10-5.42)))
+#高程H处气压P
+#P<-101.3*(((293-(0.0065*newdata$elevation))/293)^5.26)## elevation
+#汽化潜热u可以取值为2.501 MJ/kg
+climate00_15$u<-2.501-(0.002361*climate00_15$Tmean)
+#干湿常数
+climate00_15$gamma<-0.00163*climate00_15$Prs/10/climate00_15$u
+#土壤热通量MJ/m2d
+G<-diff(climate00_15$GST)
+G<-c(0,G)
+climate00_15$G<-0.38*G
+rm(G)
+
+
+
+#PET
+climate00_15$ET0<-((0.408*climate00_15$Rate*(climate00_15$Rn-climate00_15$G))+(climate00_15$gamma*climate00_15$W2*(climate00_15$ea-climate00_15$ed)*900/(273+(climate00_15$Tmean))))/(climate00_15$Rate+(climate00_15$gamma*(1+(0.34*climate00_15$W2))))
+try<-subset(climate00_15,select=c("ID","year","mon","day","ET0","Evp","Tmean"))
+
+##实际蒸散与潜在蒸散大小的比较及处理
+try1<-try[which(try$Evp-try$ET0>=0),]##筛选出实际蒸散大于等于潜在蒸散的数据
+try1$Evp<-try1$ET0##对实际蒸散值进行修改
+View(try1)
+##筛选实际蒸散小于潜在蒸散的数据
+try2<-try[which(try$Evp-try$ET0<0),]##数据不做处理
+try<-rbind(try1,try2)
+rm(try1,try2)
+
+## step3 计算实际蒸发散 （未采用下面方法）
+##公式来源：采用周广胜、张新时建立的模型
+##净辐射量（经验公式）(可以由上面的净辐射替换)
+#JFS<-((climate00_15$ET0*climate00_15$Pre)^0.5)*(0.369+(0.589*(climate00_15$ET0/climate00_15$Pre)^0.5))
+##实际蒸散发 (自然植被净第一性生产力模型初探，周广胜&张新时，1995)
+#climate00_15$AET<-(climate00_15$Rn*0.408*climate00_15$Pre*((climate00_15$Rn*0.408)^2+(climate00_15$Pre)^2+(climate00_15$Rn*0.408)*(climate00_15$Pre)))/((climate00_15$Pre+climate00_15$Rn*0.408)*((climate00_15$Rn*0.408)^2+(climate00_15$Pre)^2))
+#try<-climate00_15$AET-climate00_15$ET0
+#summary(try)
+
+
+
+#生成月值蒸发散和温度 （重点代码）
+#############################################
+#############################################
+library(plyr)
+groupColumns=c("ID","year","mon")
+monthET<-ddply(try,groupColumns,function(x)
+  colSums(x[paste(colnames(try))[5:6]]))
+monthT<-ddply(try,groupColumns,function(x)
+  colMeans(x[paste(colnames(try))[7]]))
+monthETT<-merge(monthET,monthT,all.x=TRUE)
+View(monthETT)
+rm(monthET,monthT)
+############################################
+
+
+
+## step4 计算水分胁迫因子
+monthETT$W<-0.5+0.5*(monthETT$Evp/monthETT$ET0)## former 0.05!!!!
+
+## step5 计算温度胁迫因子
+View(monthETT[monthETT$mon==8,])
+monthETT$Tmax<-rep(monthETT[monthETT$mon==8,6],each=12)
+
+##求解T1
+for (i in 1:length(monthETT$Tmean))
+{
+  if (monthETT$Tmean[i]+10 < 0)
+  {
+    monthETT$T1[i]=0
+  }
+  else
+  {
+    monthETT$T1[i]=0.8+0.02*monthETT$Tmax[i]-0.0005*(monthETT$Tmax[i]^2)#CASA模型公式
+  }
+}
+
+View(T1)
+
+##求解T2
+##T2<-data.frame(matrix(NA,length(monthETT$Tmax),1))
+for (i in 1:length(monthETT$Tmax))
+{
+  if (monthETT$Tmean[i]-monthETT$Tmax[i]>10)
+  {
+    monthETT$T2[i]=1.1814*0.5/((1+exp(0.2*((monthETT$Tmax[i])-10-(monthETT$Tmean[i]))))*(1+exp(0.3*(-(monthETT$Tmax[i])-10+(monthETT$Tmean[i])))))
+  }
+  else if (monthETT$Tmax[i]-monthETT$Tmean[i]>13)
+  {
+    monthETT$T2[i]=1.1814*0.5/((1+exp(0.2*((monthETT$Tmax[i])-10-(monthETT$Tmean[i]))))*(1+exp(0.3*(-(monthETT$Tmax[i])-10+(monthETT$Tmean[i])))))
+  }
+  else
+  {
+    monthETT$T2[i]=1.1814/((1+exp(0.2*((monthETT$Tmax[i])-10-(monthETT$Tmean[i]))))*(1+exp(0.3*(-(monthETT$Tmax[i])-10+(monthETT$Tmean[i])))))
+  }
+}
+summary(monthETT$T2)
+summary(monthETT$T1)
+
+## step 6 实际光能利用率(方法一，固定光年利用率)
+##此处将最大光能利用率取值固定为0.389；也可根据朱文泉测定的中国典型植被类型的最大光能利用率模拟结果
+##求解光能利用率
+monthETT$LU<-monthETT$T1*monthETT$T2*monthETT$W*0.389
+summary(monthETT$LU)
+
+location<-subset(climate00_15,select=c("ID","lat","long","elevation"))
+index<-duplicated(location[,1])
+location<-location[!index,]
+rm(climate00_15,try,index)
+monthETT<-merge(monthETT,location,all.x=TRUE)
+##导出文件
+write.table(monthETT,"光能利用率.csv",sep=",",row.names=FALSE)
+#插值可用Anusplin或者采取常规插值方法
+
+##插值
+setwd("D:/CASA/data_proceed/E")
+library(raster)
+library(sp)
+library(rgdal)
+library(gstat)
+library(maptools)
+library(fields)
+##HHJ.shp
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+shape<-bound #see code above
+rm(bound,China.shp,HHJ.shp)
+blank_raster<-raster(nrow=1000,ncol=1000,extent(shape))
+values(blank_raster)<-1
+bound<-rasterize(shape,blank_raster)
+grd<-as(bound,"SpatialGridDataFrame")
+coord<-coordinates(grd)
+grd$long<-coord[,1]
+grd$lat<-coord[,2]
+
+
+library(tcltk)
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+##构造选择函数及批量插值
+year<-rep(c(2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015),each=12)#构造年份数据，each表示每年12个月
+month<-rep(1:12,16)#构造月份数据
+date<-cbind(year,month)#合并数据
+for (i in 1:length(year))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(year)))
+  selection<-date[i,]
+  newdata2<-subset(monthETT,year==selection[1]&mon==selection[2])#选择数据函数
+  coordinates(newdata2)<-c("long","lat")#定义数据的坐标
+  proj4string(newdata2)<-CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")#定义空间参考
+  m<-Tps(coordinates(newdata2),newdata2$LU)##样条函数插值
+  tps<-interpolate(bound,m)
+  vr<-mask(tps,bound)#掩膜提取
+  name<-paste(selection[1],"-",selection[2])#构造导出数据的名称
+  writeRaster(vr,filename=name,"GTiff",overwrite=TRUE)#数据导出
+  setTkProgressBar(pb,value=i*100/length(year),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+## step 6 实际光能利用率(方法二，分类别光能利用率)
+##根据朱文泉测定的中国典型植被类型的最大光能利用率模拟结果（朱文泉，潘耀忠，何浩，等. 中国典型植被最大光利用率模拟[J]. 科学通报. 2006, 51(06): 700-706.）
+##计算t1*t2*w,TTW结果在E2中，不乘以0.389。最终实际光能利用率在E3中
+
+monthETT$TTW<-monthETT$T1*monthETT$T2*monthETT$W
+##导出文件
+setwd("D:/CASA/data_proceed/E2")
+write.table(monthETT,"光能利用率2.csv",sep=",",row.names=FALSE)
+#插值可用Anusplin或者采取常规插值方法
+
+##插值
+library(raster)
+library(sp)
+library(rgdal)
+library(gstat)
+library(maptools)
+library(fields)
+##HHJ.shp
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+shape<-bound #see code above
+rm(bound,China.shp,HHJ.shp)
+blank_raster<-raster(nrow=1000,ncol=1000,extent(shape))
+values(blank_raster)<-1
+bound<-rasterize(shape,blank_raster)
+grd<-as(bound,"SpatialGridDataFrame")
+coord<-coordinates(grd)
+grd$long<-coord[,1]
+grd$lat<-coord[,2]
+
+
+library(tcltk)
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+##构造选择函数及批量插值
+year<-rep(c(2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015),each=12)#构造年份数据，each表示每年12个月
+month<-rep(1:12,16)#构造月份数据
+date<-cbind(year,month)#合并数据
+for (i in 1:length(year))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(year)))
+  selection<-date[i,]
+  newdata2<-subset(monthETT,year==selection[1]&mon==selection[2])#选择数据函数
+  coordinates(newdata2)<-c("long","lat")#定义数据的坐标
+  proj4string(newdata2)<-CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")#定义空间参考
+  m<-Tps(coordinates(newdata2),newdata2$TTW)##样条函数插值
+  tps<-interpolate(bound,m)
+  vr<-mask(tps,bound)#掩膜提取
+  name<-paste(selection[1],"-",selection[2])#构造导出数据的名称
+  writeRaster(vr,filename=name,"GTiff",overwrite=TRUE)#数据导出
+  setTkProgressBar(pb,value=i*100/length(year),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+## 分别乘以最大光能利用率（HHJ_forest_250m_Pro_update.tif 为734个样点校准后的图）
+setwd("D:/CASA/data_proceed")
+#HHJ<-raster("HHJ_forest_500m_Pro.tif")
+HHJ<-raster("HHJ_forest_250m_Pro_update.tif") #替换老版本 HHJ_forest_250m_Pro.tif
+##eMax1
+HHJ[HHJ %in% c(211)]<-0.985#常绿阔叶林
+HHJ[HHJ %in% c(212)]<-0.692#落叶阔叶林
+HHJ[HHJ %in% c(214)]<-0.485#竹林
+HHJ[HHJ %in% c(221)]<-0.389#常绿针叶林
+#HHJ[HHJ %in% c(222)]<-0.485#落叶针叶林不存在
+HHJ[HHJ %in% c(230)]<-0.6265#混交林(0.475+0.768)/2
+HHJ[HHJ %in% c(255)]<-0#non
+writeRaster(HHJ,filename="eMax1_250m","GTiff",overwrite=TRUE)
+
+eMax1<-raster("D:/CASA/data_proceed/eMax1_250m.tif")
+setwd("D:/CASA/data_proceed/E2")
+newfiles<-dir("D:/CASA/data_proceed/E2",pattern=".tif")
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+
+  ###载入TTW
+  TTW<-raster(paste("D:/CASA/data_proceed/E2","/",newfiles[i],sep=""),value=TRUE)
+  sr<-"+proj=longlat +datum=WGS84 +no_defs"
+  crs(TTW)<-sr##定义投影
+  #extent(E)<-extent(APAR)
+  TTW<-resample(TTW,eMax1,methond="ngb")##重采样
+  E<-TTW*eMax1
+  setwd("D:/CASA/data_proceed/E3")
+  name<-paste("E",newfiles[i],sep="")
+  writeRaster(E,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+
+
+## step7 NDVImax NDVImin SRmax SRmin
+library(raster)
+library(rgdal)
+library(maptools)
+library(sp)
+library(gstat)
+library(tcltk)
+library(plotKML)
+setwd("D:/CASA/data_proceed")
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound<-HHJ.shp
+plot(bound)
+rm(China.shp,HHJ.shp)
+
+
+#### Li et al. 2014 30m 分类图 Li C, Wang J, Hu L, et al. A Circa 2010 Thirty Meter Resolution Forest Map for China[J]. Remote Sensing. 2014, 6(6): 5325-5343.############################################################
+#############################
+#too slow, done in Arcgis pro
+setwd("D:/GIS/Finer_Resolution_Observation_and_Monitoring_GlobalLandCover/ForestMapsForChina")
+forest<-raster("China_forest_6type_clip.tif")
+plot(forest)
+sr<-"+proj=longlat +datum=WGS84 +no_defs"
+forest<-projectRaster(forest,crs=sr)
+China.shp<-readOGR("D:/GIS/China_Prov.shp",layer="China_Prov",encoding = "UTF-8")##导入用于剪裁的边界
+HHJ.shp<-China.shp[which(China.shp$NAME%in%c("江西省","湖北省","湖南省")),]
+bound_raster<-rasterize(HHJ.shp,forest)##将bound转为栅格
+mask<-mask(forest,bound_raster)##进行掩膜提取，后面的*1目的是用于栅格数据的统计
+writeRaster(mask,filename="HHJ_forest_30m","GTiff",overwrite=TRUE)##将数据进行导出
+plot(mask)
+rm(bound_raster,forest,mask)
+
+##############################
+setwd("D:/CASA/data_proceed")
+#HHJ<-raster("HHJ_forest_500m_Pro.tif")
+HHJ<-raster("HHJ_forest_250m_Pro_update.tif")# 经过样点校准
+##NDVImax计算
+HHJ[HHJ %in% c(211)]<-0.676#常绿阔叶林
+HHJ[HHJ %in% c(212)]<-0.747#落叶阔叶林
+HHJ[HHJ %in% c(214)]<-0.82#竹林
+HHJ[HHJ %in% c(221)]<-0.647#常绿针叶林
+#HHJ[HHJ %in% c(222)]<-0.738#落叶针叶林
+HHJ[HHJ %in% c(230)]<-0.707#混交林
+HHJ[HHJ %in% c(255)]<-0.63#non
+writeRaster(HHJ,filename="NDVImax_250m","GTiff",overwrite=TRUE)
+
+##NDVImin计算 略!!!!!!!!!
+HHJ[HHJ %in% c(7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22)]<-0.023
+HHJ[HHJ %in% c(1)]<-0.023
+HHJ[HHJ %in% c(2)]<-0.023
+HHJ[HHJ %in% c(3)]<-0.023
+HHJ[HHJ %in% c(4)]<-0.023
+HHJ[HHJ %in% c(5)]<-0.023
+HHJ[HHJ %in% c(6)]<-0.023
+writeRaster(HHJ,filename="NDVImin","GTiff",overwrite=TRUE)
+
+HHJ<-raster("HHJ_forest_250m_Pro_update.tif")# 经过样点校准
+##SRmax计算
+HHJ[HHJ %in% c(211)]<-5.17#常绿阔叶林
+HHJ[HHJ %in% c(212)]<-6.91#落叶阔叶林
+HHJ[HHJ %in% c(214)]<-6.6#竹林
+HHJ[HHJ %in% c(221)]<-4.67#常绿针叶林
+#HHJ[HHJ %in% c(222)]<-6.63#落叶针叶林
+HHJ[HHJ %in% c(230)]<-4.92#混交林
+HHJ[HHJ %in% c(255)]<-4.0505#non
+writeRaster(HHJ,filename="SRmax_250m","GTiff",overwrite=TRUE) #犯过错，写出数据时是NDVImax的结果，建议写出后check一下
+
+##SRmin计算 略!!!!!!
+HHJ[HHJ %in% c(7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22)]<-1.05
+HHJ[HHJ %in% c(1)]<-1.05
+HHJ[HHJ %in% c(2)]<-1.05
+HHJ[HHJ %in% c(3)]<-1.05
+HHJ[HHJ %in% c(4)]<-1.05
+HHJ[HHJ %in% c(5)]<-1.05
+HHJ[HHJ %in% c(6)]<-1.05
+writeRaster(HHJ,filename="SRmax","GTiff",overwrite=TRUE)
+####################################################################################
+
+## step8 最终计算过程 (系统运算)
+
+##打开NDVImax、min以及SRmax、min数据
+rm(HHJ)
+gc()
+NDVImax<-raster("D:/CASA/data_proceed/NDVImax_250m.tif")##读取NDVImax 100m/500m
+SRmax<-raster("D:/CASA/data_proceed/SRmax_250m.tif")##读取SRmax 100m/500m
+
+#CRS("+init=epsg:4326")
+
+###计算NPP raster包#########################################################################################
+library(gtools)
+newfiles<-dir("D:/MODIS_NDVI_250m",pattern=".tif")
+
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  setwd("D:/MODIS_NDVI_250m")##设置工作目录
+  newfiles<-dir("D:/MODIS_NDVI_250m",pattern=".tif")##提取已获得的NDVI.tif数据
+  NDVITIF<-raster(paste("D:/MODIS_NDVI_250m","/",newfiles[i],sep=""),value=TRUE)##读取NDVI
+  #projected_raster<-projectRaster(NDVITIF,crs=sr)##本身就是WGS84
+  NDVI<-resample(NDVITIF,NDVImax,methond="ngb")##重采样
+  FPARndvi<-((NDVI-0.023)*(0.950-0.001)/(NDVImax-0.023))+0.001##FPARndvi计算
+  FPARndvi[values(FPARndvi)<0]<-0
+  FPARndvi[values(FPARndvi)-1>0]<-1
+  FPARsr<-((((1+NDVI)/(1-NDVI))-1.05)*(0.950-0.001)/(SRmax-1.05))+0.001##FPARsr计算
+  FPARsr[values(FPARsr)<0]<-0
+  FPARsr[values(FPARsr)-1>0]<-1
+  FPAR<-(FPARndvi+FPARsr)/2##FPAR计算
+  
+  
+  ###方法1：载入太阳总辐射数据
+  setwd("D:/CASA/data_proceed/radiation")
+  newfiles2<-dir("D:/CASA/data_proceed/radiation",pattern=".tif")##读取工作目录
+  files<-mixedsort(newfiles2)##列表进行排序
+  SOLTIF<-raster(paste("D:/CASA/data_proceed/radiation","/",files[i],sep=""),value=TRUE)##读取太阳辐射数据
+  #projected_raster1<-projected_raster(SOLTIF,crs=sr)##投影转换
+  sr<-"+proj=longlat +datum=WGS84 +no_defs"
+  crs(SOLTIF)<-sr
+  SOL<-resample(SOLTIF,NDVImax,methond="ngb")##重采样
+  APAR<-FPAR*SOL*0.5##计算光合有效辐射APAR
+  
+  ###方法2：载入中国光合有效辐射重构数据集PAR
+  #APAR<-FPAR*PAR##计算光合有效辐射APAR
+  
+  
+  ###载入光能实际利用率
+  setwd("D:/CASA/data_proceed/E")
+  newfiles3<-dir("D:/CASA/data_proceed/E",pattern=".tif")##读取工作目录
+  E<-raster(paste("D:/CASA/data_proceed/E","/",newfiles3[i],sep=""),value=TRUE)
+  crs(E)<-sr##定义投影
+  extent(E)<-extent(APAR)
+  E<-resample(E,NDVImax,methond="ngb")##重采样
+  NPP<-APAR*E
+  NPP[NPP<0]<-0
+  setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+  name<-paste("CASA-",newfiles[i],sep="")
+  writeRaster(NPP,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+### end ##########################################################################################
+rm(list = ls())
+
+
+## step8 最终计算过程(独立运算)
+
+##打开NDVImax以及SRmax
+rm(list = ls())
+gc()
+NDVImax<-raster("D:/CASA/data_proceed/NDVImax_250m.tif")##读取NDVImax 100m/500m
+SRmax<-raster("D:/CASA/data_proceed/SRmax_250m.tif")##读取SRmax 100m/500m
+
+#CRS("+init=epsg:4326")
+
+###计算NPP raster包#########################################################################################
+###FPAR
+library(gtools)
+newfiles<-dir("D:/MODIS_NDVI_250m",pattern=".tif")
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  setwd("D:/MODIS_NDVI_250m")##设置工作目录
+  newfiles<-dir("D:/MODIS_NDVI_250m",pattern=".tif")##提取已获得的NDVI.tif数据
+  NDVITIF<-raster(paste("D:/MODIS_NDVI_250m","/",newfiles[i],sep=""),value=TRUE)##读取NDVI
+  #projected_raster<-projectRaster(NDVITIF,crs=sr)##本身就是WGS84
+  NDVI<-resample(NDVITIF,NDVImax,methond="ngb")##重采样
+  FPARndvi<-((NDVI-0.023)*(0.950-0.001)/(NDVImax-0.023))+0.001##FPARndvi计算
+  FPARndvi[values(FPARndvi)<0]<-0
+  FPARndvi[values(FPARndvi)-1>0]<-1
+  FPARsr<-((((1+NDVI)/(1-NDVI))-1.05)*(0.950-0.001)/(SRmax-1.05))+0.001##FPARsr计算
+  FPARsr[values(FPARsr)<0]<-0
+  FPARsr[values(FPARsr)-1>0]<-1
+  FPAR<-(FPARndvi+FPARsr)/2##FPAR计算
+  setwd("D:/CASA/data_proceed/FPAR")
+  name<-paste("FPAR",newfiles[i],sep="")
+  writeRaster(FPAR,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+
+
+###APAR
+## 载入光合有效辐射重构数据和FPAR
+#APAR<-FPAR*PAR##计算光合有效辐射APAR
+newfiles<-dir("D:/CASA/data_proceed/FPAR",pattern=".tif")
+newfiles2<-dir("D:/CASA/data_proceed/PAR",pattern=".tif")
+newfiles2<-mixedsort(newfiles2)##列表进行排序
+setwd("D:/CASA/data_proceed/APAR")
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  #files1<-mixedsort(newfiles)##列表进行排序
+  #files2<-mixedsort(newfiles2)##列表进行排序
+  FPAR<-raster(paste("D:/CASA/data_proceed/FPAR","/",newfiles[i],sep=""),value=TRUE)##读取光合有效辐射分量数据
+  PAR<-raster(paste("D:/CASA/data_proceed/PAR","/",newfiles2[i],sep=""),value=TRUE)##读取光合有效辐射分量数据
+  
+  sr<-"+proj=longlat +datum=WGS84 +no_defs"
+  crs(FPAR)<-sr
+  crs(PAR)<-sr
+  rFPAR<-resample(FPAR,NDVImax,methond="ngb")##重采样
+  rPAR<-resample(PAR,NDVImax,methond="ngb")##重采样
+  APAR<-rFPAR*rPAR##计算可吸收光合有效辐射APAR
+  name<-paste("APAR",newfiles2[i],sep="")
+  writeRaster(APAR,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}  
+
+
+  ###载入实际光能利用率并计算NPP
+newfiles<-dir("D:/CASA/data_proceed/E3",pattern=".tif")##读取工作目录，检查顺序
+newfiles2<-dir("D:/CASA/data_proceed/APAR",pattern=".tif")##读取工作目录，检查顺序
+newfiles<-mixedsort(newfiles)
+newfiles2<-mixedsort(newfiles2)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  E<-raster(paste("D:/CASA/data_proceed/E3","/",newfiles[i],sep=""),value=TRUE)
+  APAR<-raster(paste("D:/CASA/data_proceed/APAR","/",newfiles2[i],sep=""),value=TRUE)
+  
+  NPP<-APAR*E
+  NPP[NPP<0]<-0
+  
+  name<-paste("CASA-",newfiles[i],sep="")
+  writeRaster(NPP,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+rm(list = ls())
+gc()
+### end ##########################################################################################
+
+
+###计算NPP terra包 (fail to install)#########################################################################################
+library(gtools)
+newfiles<-dir("D:/GeoSpatialDataCloud/NDVI500m/mask-NDVI",pattern=".tif")
+
+
+pb<-tkProgressBar(title="进度",label="已完成 %",min=0,max=100,initial=0,width=300)##开启进度条
+for (i in 1:length(newfiles))
+{
+  info<-sprintf("已完成 %d%%",round(i*100/length(newfiles)))
+  setwd("D:/GeoSpatialDataCloud/NDVI500m/mask-NDVI")##设置工作目录
+  newfiles<-dir("D:/GeoSpatialDataCloud/NDVI500m/mask-NDVI",pattern=".tif")##提取已获得的NDVI.tif数据
+  NDVITIF<-rast(paste("D:/GeoSpatialDataCloud/NDVI500m/mask-NDVI","/",newfiles[i],sep=""),value=TRUE)##读取NDVI
+  #projected_raster<-projectRaster(NDVITIF,crs=sr)##本身就是WGS84
+  NDVI<-resample(NDVITIF,NDVImax,methond="ngb")##重采样
+  FPARndvi<-((NDVI-0.023)*(0.950-0.001)/(NDVImax-0.023))+0.001##FPARndvi计算
+  FPARndvi[values(FPARndvi)<0]<-0
+  FPARndvi[values(FPARndvi)-1>0]<-1
+  FPARsr<-((((1+NDVI)/(1-NDVI))-1.05)*(0.950-0.001)/(SRmax-1.05))+0.001##FPARsr计算
+  FPARsr[values(FPARsr)<0]<-0
+  FPARsr[values(FPARsr)-1>0]<-1
+  FPAR<-(FPARndvi+FPARsr)/2##FPAR计算
+  
+  
+  ###方法1：载入太阳总辐射数据
+  setwd("D:/CASA/data_proceed/radiation")
+  newfiles2<-dir("D:/CASA/data_proceed/radiation",pattern=".tif")##读取工作目录
+  files<-mixedsort(newfiles2)##列表进行排序
+  SOLTIF<-rast(paste("D:/CASA/data_proceed/radiation","/",files[i],sep=""),value=TRUE)##读取太阳辐射数据
+  #projected_raster1<-projected_raster(SOLTIF,crs=sr)##投影转换
+  sr<-"+proj=longlat +datum=WGS84 +no_defs"
+  crs(SOLTIF)<-sr
+  SOL<-resample(SOLTIF,NDVImax,methond="ngb")##重采样
+  APAR<-FPAR*SOL*0.5##计算光合有效辐射APAR
+  ###方法2：载入中国光合有效辐射重构数据集PAR
+  #APAR<-FPAR*PAR##计算光合有效辐射APAR
+  
+  
+  ###载入光能实际利用率
+  setwd("D:/CASA/data_proceed/E")
+  newfiles3<-dir("D:/CASA/data_proceed/E",pattern=".tif")##读取工作目录
+  E<-rast(paste("D:/CASA/data_proceed/E","/",newfiles3[i],sep=""),value=TRUE)
+  crs(E)<-sr##定义投影
+  extent(E)<-extent(APAR)
+  E<-resample(E,NDVImax,methond="ngb")##重采样
+  NPP<-APAR*E
+  NPP[NPP<0]<-0
+  setwd("D:/CASA/data_proceed/NPP-OUT/NPP_100m")
+  name<-paste("CASA-",newfiles[i],sep="")
+  terra::writeRaster(NPP,filename=name,"GTiff",overwrite=TRUE)
+  setTkProgressBar(pb,value=i*100/length(newfiles),title=sprintf("进度 (%s)",info),label=info)
+}
+close(pb)
+
+### end ##########################################################################################
+rm(list = ls())
+
+
+###################### NPP/ES by season/growth period/year (一) 由总辐射计算########################
+library(terra)
+library(raster)
+library(rgdal)
+library(maptools)
+library(sp)
+library(gstat)
+library(tcltk)
+library(plotKML)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+dir.create("NPP_spr_cum")
+dir.create("NPP_sum_cum")
+dir.create("NPP_aut_cum")
+dir.create("NPP_win_cum")
+dir.create("NPP_growth_cum")
+dir.create("NPP_annual_cum")
+
+dir.create("ES_spr_perYear")# based on NPP per month
+dir.create("ES_sum_perYear")
+dir.create("ES_aut_perYear")
+dir.create("ES_win_perYear")
+dir.create("ES_growth_perYear")
+#dir.create("ES_annual_perYear")
+
+dir.create("ES_spr_allYear")# based on cumulated NPP
+dir.create("ES_sum_allYear")
+dir.create("ES_aut_allYear")
+dir.create("ES_win_allYear")
+dir.create("ES_growth_allYear")
+dir.create("ES_annual_allYear")
+
+
+
+dir.create("2000")
+dir.create("2001")
+dir.create("2002")
+dir.create("2003")
+dir.create("2004")
+dir.create("2005")
+dir.create("2006")
+dir.create("2007")
+dir.create("2008")
+dir.create("2009")
+dir.create("2010")
+dir.create("2011")
+dir.create("2012")
+dir.create("2013")
+dir.create("2014")
+dir.create("2015")
+
+path<-"D:/CASA/data_proceed/NPP-OUT/NPP_250m"##查看路径
+NPP<-dir(path,pattern=".tif")##查看路径中所有的.tif文件
+NPP<-mixedsort(NPP)
+file.copy(NPP[1:12],"2000")##将所有.tif文件复制进入文件夹
+file.copy(NPP[13:24],"2001")
+file.copy(NPP[25:36],"2002")
+file.copy(NPP[37:48],"2003")
+file.copy(NPP[49:60],"2004")
+file.copy(NPP[61:72],"2005")
+file.copy(NPP[73:84],"2006")
+file.copy(NPP[85:96],"2007")
+file.copy(NPP[97:108],"2008")
+file.copy(NPP[109:120],"2009")
+file.copy(NPP[121:132],"2010")
+file.copy(NPP[133:144],"2011")
+file.copy(NPP[145:156],"2012")
+file.copy(NPP[157:168],"2013")
+file.copy(NPP[169:180],"2014")
+file.copy(NPP[181:192],"2015")
+#file.remove(NPP)##删除原有路径中所有.tif
+
+############# test sd() code ###########
+library(raster)
+r <- raster(ncol=10, nrow=10)
+r1 <- setValues(r,1)
+r2 <- setValues(r,5)
+r3 <- setValues(r,10)
+s <- stack(r1, r2, r3)
+y <- calc(s, fun=function(x) sd(x))
+plot(y)
+b<-mean(r1+r2+r3)/y
+c<-mean(r1+r2+r3)
+d<-r1+r2+r3
+e<-d/3
+f<-e/y
+g<-d/y
+h<-(r1+r2+r3)/3/y
+j<-cv(s)# the results of cv should *100 to match the mean/sd 
+plot(b)#mean() function useless
+plot(c)
+plot(d)
+plot(e)
+plot(f)
+plot(g)
+plot(h)
+plot(j)
+a<-c(1,5,10)
+sd(a)
+mean(a)
+mean(a)/sd(a)
+#######################################
+
+
+
+######## 2000 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2000/CASA-NDVI_200001.tif")
+npp2<-raster("2000/CASA-NDVI_200002.tif")
+npp3<-raster("2000/CASA-NDVI_200003.tif")
+npp4<-raster("2000/CASA-NDVI_200004.tif")
+npp5<-raster("2000/CASA-NDVI_200005.tif")
+npp6<-raster("2000/CASA-NDVI_200006.tif")
+npp7<-raster("2000/CASA-NDVI_200007.tif")
+npp8<-raster("2000/CASA-NDVI_200008.tif")
+npp9<-raster("2000/CASA-NDVI_200009.tif")
+npp10<-raster("2000/CASA-NDVI_200010.tif")
+npp11<-raster("2000/CASA-NDVI_200011.tif")
+npp12<-raster("2000/CASA-NDVI_200012.tif")
+
+#cumulated NPP
+spr2000<-npp3+npp4+npp5
+sum2000<-npp6+npp7+npp8
+aut2000<-npp9+npp10+npp11
+win2000<-npp12+npp1+npp2
+growth2000<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2000<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2000,filename="nppspr2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2000,filename="nppsum2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2000,filename="nppaut2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2000,filename="nppwin2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2000,filename="nppgrowth2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2000,filename="npp2000","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2000<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2000<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2000<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2000<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2000<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2000,filename="ESspr2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2000,filename="ESsum2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2000,filename="ESaut2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2000,filename="ESwin2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2000,filename="ESgrowth2000","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2001 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2001/CASA-NDVI_200101.tif")
+npp2<-raster("2001/CASA-NDVI_200102.tif")
+npp3<-raster("2001/CASA-NDVI_200103.tif")
+npp4<-raster("2001/CASA-NDVI_200104.tif")
+npp5<-raster("2001/CASA-NDVI_200105.tif")
+npp6<-raster("2001/CASA-NDVI_200106.tif")
+npp7<-raster("2001/CASA-NDVI_200107.tif")
+npp8<-raster("2001/CASA-NDVI_200108.tif")
+npp9<-raster("2001/CASA-NDVI_200109.tif")
+npp10<-raster("2001/CASA-NDVI_200110.tif")
+npp11<-raster("2001/CASA-NDVI_200111.tif")
+npp12<-raster("2001/CASA-NDVI_200112.tif")
+
+#cumulated NPP
+spr2001<-npp3+npp4+npp5
+sum2001<-npp6+npp7+npp8
+aut2001<-npp9+npp10+npp11
+win2001<-npp12+npp1+npp2
+growth2001<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2001<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2001,filename="nppspr2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2001,filename="nppsum2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2001,filename="nppaut2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2001,filename="nppwin2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2001,filename="nppgrowth2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2001,filename="npp2001","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2001<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2001<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2001<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2001<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2001<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2001,filename="ESspr2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2001,filename="ESsum2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2001,filename="ESaut2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2001,filename="ESwin2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2001,filename="ESgrowth2001","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2002 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2002/CASA-NDVI_200201.tif")
+npp2<-raster("2002/CASA-NDVI_200202.tif")
+npp3<-raster("2002/CASA-NDVI_200203.tif")
+npp4<-raster("2002/CASA-NDVI_200204.tif")
+npp5<-raster("2002/CASA-NDVI_200205.tif")
+npp6<-raster("2002/CASA-NDVI_200206.tif")
+npp7<-raster("2002/CASA-NDVI_200207.tif")
+npp8<-raster("2002/CASA-NDVI_200208.tif")
+npp9<-raster("2002/CASA-NDVI_200209.tif")
+npp10<-raster("2002/CASA-NDVI_200210.tif")
+npp11<-raster("2002/CASA-NDVI_200211.tif")
+npp12<-raster("2002/CASA-NDVI_200212.tif")
+
+#cumulated NPP
+spr2002<-npp3+npp4+npp5
+sum2002<-npp6+npp7+npp8
+aut2002<-npp9+npp10+npp11
+win2002<-npp12+npp1+npp2
+growth2002<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2002<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2002,filename="nppspr2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2002,filename="nppsum2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2002,filename="nppaut2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2002,filename="nppwin2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2002,filename="nppgrowth2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2002,filename="npp2002","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2002<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2002<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2002<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2002<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2002<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2002,filename="ESspr2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2002,filename="ESsum2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2002,filename="ESaut2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2002,filename="ESwin2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2002,filename="ESgrowth2002","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2003 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2003/CASA-NDVI_200301.tif")
+npp2<-raster("2003/CASA-NDVI_200302.tif")
+npp3<-raster("2003/CASA-NDVI_200303.tif")
+npp4<-raster("2003/CASA-NDVI_200304.tif")
+npp5<-raster("2003/CASA-NDVI_200305.tif")
+npp6<-raster("2003/CASA-NDVI_200306.tif")
+npp7<-raster("2003/CASA-NDVI_200307.tif")
+npp8<-raster("2003/CASA-NDVI_200308.tif")
+npp9<-raster("2003/CASA-NDVI_200309.tif")
+npp10<-raster("2003/CASA-NDVI_200310.tif")
+npp11<-raster("2003/CASA-NDVI_200311.tif")
+npp12<-raster("2003/CASA-NDVI_200312.tif")
+
+#cumulated NPP
+spr2003<-npp3+npp4+npp5
+sum2003<-npp6+npp7+npp8
+aut2003<-npp9+npp10+npp11
+win2003<-npp12+npp1+npp2
+growth2003<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2003<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2003,filename="nppspr2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2003,filename="nppsum2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2003,filename="nppaut2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2003,filename="nppwin2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2003,filename="nppgrowth2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2003,filename="npp2003","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2003<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2003<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2003<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2003<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2003<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2003,filename="ESspr2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2003,filename="ESsum2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2003,filename="ESaut2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2003,filename="ESwin2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2003,filename="ESgrowth2003","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2004 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2004/CASA-NDVI_200401.tif")
+npp2<-raster("2004/CASA-NDVI_200402.tif")
+npp3<-raster("2004/CASA-NDVI_200403.tif")
+npp4<-raster("2004/CASA-NDVI_200404.tif")
+npp5<-raster("2004/CASA-NDVI_200405.tif")
+npp6<-raster("2004/CASA-NDVI_200406.tif")
+npp7<-raster("2004/CASA-NDVI_200407.tif")
+npp8<-raster("2004/CASA-NDVI_200408.tif")
+npp9<-raster("2004/CASA-NDVI_200409.tif")
+npp10<-raster("2004/CASA-NDVI_200410.tif")
+npp11<-raster("2004/CASA-NDVI_200411.tif")
+npp12<-raster("2004/CASA-NDVI_200412.tif")
+
+#cumulated NPP
+spr2004<-npp3+npp4+npp5
+sum2004<-npp6+npp7+npp8
+aut2004<-npp9+npp10+npp11
+win2004<-npp12+npp1+npp2
+growth2004<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2004<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2004,filename="nppspr2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2004,filename="nppsum2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2004,filename="nppaut2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2004,filename="nppwin2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2004,filename="nppgrowth2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2004,filename="npp2004","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2004<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2004<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2004<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2004<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2004<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2004,filename="ESspr2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2004,filename="ESsum2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2004,filename="ESaut2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2004,filename="ESwin2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2004,filename="ESgrowth2004","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2005 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2005/CASA-NDVI_200501.tif")
+npp2<-raster("2005/CASA-NDVI_200502.tif")
+npp3<-raster("2005/CASA-NDVI_200503.tif")
+npp4<-raster("2005/CASA-NDVI_200504.tif")
+npp5<-raster("2005/CASA-NDVI_200505.tif")
+npp6<-raster("2005/CASA-NDVI_200506.tif")
+npp7<-raster("2005/CASA-NDVI_200507.tif")
+npp8<-raster("2005/CASA-NDVI_200508.tif")
+npp9<-raster("2005/CASA-NDVI_200509.tif")
+npp10<-raster("2005/CASA-NDVI_200510.tif")
+npp11<-raster("2005/CASA-NDVI_200511.tif")
+npp12<-raster("2005/CASA-NDVI_200512.tif")
+
+#cumulated NPP
+spr2005<-npp3+npp4+npp5
+sum2005<-npp6+npp7+npp8
+aut2005<-npp9+npp10+npp11
+win2005<-npp12+npp1+npp2
+growth2005<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2005<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2005,filename="nppspr2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2005,filename="nppsum2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2005,filename="nppaut2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2005,filename="nppwin2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2005,filename="nppgrowth2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2005,filename="npp2005","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2005<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2005<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2005<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2005<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2005<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2005,filename="ESspr2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2005,filename="ESsum2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2005,filename="ESaut2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2005,filename="ESwin2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2005,filename="ESgrowth2005","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2006 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2006/CASA-NDVI_200601.tif")
+npp2<-raster("2006/CASA-NDVI_200602.tif")
+npp3<-raster("2006/CASA-NDVI_200603.tif")
+npp4<-raster("2006/CASA-NDVI_200604.tif")
+npp5<-raster("2006/CASA-NDVI_200605.tif")
+npp6<-raster("2006/CASA-NDVI_200606.tif")
+npp7<-raster("2006/CASA-NDVI_200607.tif")
+npp8<-raster("2006/CASA-NDVI_200608.tif")
+npp9<-raster("2006/CASA-NDVI_200609.tif")
+npp10<-raster("2006/CASA-NDVI_200610.tif")
+npp11<-raster("2006/CASA-NDVI_200611.tif")
+npp12<-raster("2006/CASA-NDVI_200612.tif")
+
+#cumulated NPP
+spr2006<-npp3+npp4+npp5
+sum2006<-npp6+npp7+npp8
+aut2006<-npp9+npp10+npp11
+win2006<-npp12+npp1+npp2
+growth2006<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2006<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2006,filename="nppspr2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2006,filename="nppsum2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2006,filename="nppaut2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2006,filename="nppwin2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2006,filename="nppgrowth2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2006,filename="npp2006","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2006<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2006<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2006<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2006<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2006<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2006,filename="ESspr2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2006,filename="ESsum2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2006,filename="ESaut2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2006,filename="ESwin2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2006,filename="ESgrowth2006","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2007 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2007/CASA-NDVI_200701.tif")
+npp2<-raster("2007/CASA-NDVI_200702.tif")
+npp3<-raster("2007/CASA-NDVI_200703.tif")
+npp4<-raster("2007/CASA-NDVI_200704.tif")
+npp5<-raster("2007/CASA-NDVI_200705.tif")
+npp6<-raster("2007/CASA-NDVI_200706.tif")
+npp7<-raster("2007/CASA-NDVI_200707.tif")
+npp8<-raster("2007/CASA-NDVI_200708.tif")
+npp9<-raster("2007/CASA-NDVI_200709.tif")
+npp10<-raster("2007/CASA-NDVI_200710.tif")
+npp11<-raster("2007/CASA-NDVI_200711.tif")
+npp12<-raster("2007/CASA-NDVI_200712.tif")
+
+#cumulated NPP
+spr2007<-npp3+npp4+npp5
+sum2007<-npp6+npp7+npp8
+aut2007<-npp9+npp10+npp11
+win2007<-npp12+npp1+npp2
+growth2007<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2007<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2007,filename="nppspr2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2007,filename="nppsum2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2007,filename="nppaut2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2007,filename="nppwin2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2007,filename="nppgrowth2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2007,filename="npp2007","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2007<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2007<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2007<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2007<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2007<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2007,filename="ESspr2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2007,filename="ESsum2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2007,filename="ESaut2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2007,filename="ESwin2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2007,filename="ESgrowth2007","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2008 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2008/CASA-NDVI_200801.tif")
+npp2<-raster("2008/CASA-NDVI_200802.tif")
+npp3<-raster("2008/CASA-NDVI_200803.tif")
+npp4<-raster("2008/CASA-NDVI_200804.tif")
+npp5<-raster("2008/CASA-NDVI_200805.tif")
+npp6<-raster("2008/CASA-NDVI_200806.tif")
+npp7<-raster("2008/CASA-NDVI_200807.tif")
+npp8<-raster("2008/CASA-NDVI_200808.tif")
+npp9<-raster("2008/CASA-NDVI_200809.tif")
+npp10<-raster("2008/CASA-NDVI_200810.tif")
+npp11<-raster("2008/CASA-NDVI_200811.tif")
+npp12<-raster("2008/CASA-NDVI_200812.tif")
+
+#cumulated NPP
+spr2008<-npp3+npp4+npp5
+sum2008<-npp6+npp7+npp8
+aut2008<-npp9+npp10+npp11
+win2008<-npp12+npp1+npp2
+growth2008<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2008<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2008,filename="nppspr2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2008,filename="nppsum2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2008,filename="nppaut2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2008,filename="nppwin2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2008,filename="nppgrowth2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2008,filename="npp2008","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2008<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2008<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2008<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2008<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2008<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2008,filename="ESspr2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2008,filename="ESsum2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2008,filename="ESaut2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2008,filename="ESwin2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2008,filename="ESgrowth2008","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2009 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2009/CASA-NDVI_200901.tif")
+npp2<-raster("2009/CASA-NDVI_200902.tif")
+npp3<-raster("2009/CASA-NDVI_200903.tif")
+npp4<-raster("2009/CASA-NDVI_200904.tif")
+npp5<-raster("2009/CASA-NDVI_200905.tif")
+npp6<-raster("2009/CASA-NDVI_200906.tif")
+npp7<-raster("2009/CASA-NDVI_200907.tif")
+npp8<-raster("2009/CASA-NDVI_200908.tif")
+npp9<-raster("2009/CASA-NDVI_200909.tif")
+npp10<-raster("2009/CASA-NDVI_200910.tif")
+npp11<-raster("2009/CASA-NDVI_200911.tif")
+npp12<-raster("2009/CASA-NDVI_200912.tif")
+
+#cumulated NPP
+spr2009<-npp3+npp4+npp5
+sum2009<-npp6+npp7+npp8
+aut2009<-npp9+npp10+npp11
+win2009<-npp12+npp1+npp2
+growth2009<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2009<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2009,filename="nppspr2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2009,filename="nppsum2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2009,filename="nppaut2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2009,filename="nppwin2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2009,filename="nppgrowth2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2009,filename="npp2009","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2009<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2009<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2009<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2009<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2009<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2009,filename="ESspr2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2009,filename="ESsum2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2009,filename="ESaut2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2009,filename="ESwin2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2009,filename="ESgrowth2009","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2010 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2010/CASA-NDVI_201001.tif")
+npp2<-raster("2010/CASA-NDVI_201002.tif")
+npp3<-raster("2010/CASA-NDVI_201003.tif")
+npp4<-raster("2010/CASA-NDVI_201004.tif")
+npp5<-raster("2010/CASA-NDVI_201005.tif")
+npp6<-raster("2010/CASA-NDVI_201006.tif")
+npp7<-raster("2010/CASA-NDVI_201007.tif")
+npp8<-raster("2010/CASA-NDVI_201008.tif")
+npp9<-raster("2010/CASA-NDVI_201009.tif")
+npp10<-raster("2010/CASA-NDVI_201010.tif")
+npp11<-raster("2010/CASA-NDVI_201011.tif")
+npp12<-raster("2010/CASA-NDVI_201012.tif")
+
+#cumulated NPP
+spr2010<-npp3+npp4+npp5
+sum2010<-npp6+npp7+npp8
+aut2010<-npp9+npp10+npp11
+win2010<-npp12+npp1+npp2
+growth2010<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2010<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2010,filename="nppspr2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2010,filename="nppsum2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2010,filename="nppaut2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2010,filename="nppwin2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2010,filename="nppgrowth2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2010,filename="npp2010","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2010<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2010<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2010<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2010<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2010<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2010,filename="ESspr2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2010,filename="ESsum2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2010,filename="ESaut2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2010,filename="ESwin2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2010,filename="ESgrowth2010","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2011 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2011/CASA-NDVI_201101.tif")
+npp2<-raster("2011/CASA-NDVI_201102.tif")
+npp3<-raster("2011/CASA-NDVI_201103.tif")
+npp4<-raster("2011/CASA-NDVI_201104.tif")
+npp5<-raster("2011/CASA-NDVI_201105.tif")
+npp6<-raster("2011/CASA-NDVI_201106.tif")
+npp7<-raster("2011/CASA-NDVI_201107.tif")
+npp8<-raster("2011/CASA-NDVI_201108.tif")
+npp9<-raster("2011/CASA-NDVI_201109.tif")
+npp10<-raster("2011/CASA-NDVI_201110.tif")
+npp11<-raster("2011/CASA-NDVI_201111.tif")
+npp12<-raster("2011/CASA-NDVI_201112.tif")
+
+#cumulated NPP
+spr2011<-npp3+npp4+npp5
+sum2011<-npp6+npp7+npp8
+aut2011<-npp9+npp10+npp11
+win2011<-npp12+npp1+npp2
+growth2011<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2011<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2011,filename="nppspr2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2011,filename="nppsum2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2011,filename="nppaut2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2011,filename="nppwin2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2011,filename="nppgrowth2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2011,filename="npp2011","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2011<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2011<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2011<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2011<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2011<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2011,filename="ESspr2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2011,filename="ESsum2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2011,filename="ESaut2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2011,filename="ESwin2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2011,filename="ESgrowth2011","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2012 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2012/CASA-NDVI_201201.tif")
+npp2<-raster("2012/CASA-NDVI_201202.tif")
+npp3<-raster("2012/CASA-NDVI_201203.tif")
+npp4<-raster("2012/CASA-NDVI_201204.tif")
+npp5<-raster("2012/CASA-NDVI_201205.tif")
+npp6<-raster("2012/CASA-NDVI_201206.tif")
+npp7<-raster("2012/CASA-NDVI_201207.tif")
+npp8<-raster("2012/CASA-NDVI_201208.tif")
+npp9<-raster("2012/CASA-NDVI_201209.tif")
+npp10<-raster("2012/CASA-NDVI_201210.tif")
+npp11<-raster("2012/CASA-NDVI_201211.tif")
+npp12<-raster("2012/CASA-NDVI_201212.tif")
+
+#cumulated NPP
+spr2012<-npp3+npp4+npp5
+sum2012<-npp6+npp7+npp8
+aut2012<-npp9+npp10+npp11
+win2012<-npp12+npp1+npp2
+growth2012<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2012<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2012,filename="nppspr2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2012,filename="nppsum2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2012,filename="nppaut2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2012,filename="nppwin2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2012,filename="nppgrowth2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2012,filename="npp2012","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2012<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2012<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2012<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2012<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2012<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2012,filename="ESspr2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2012,filename="ESsum2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2012,filename="ESaut2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2012,filename="ESwin2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2012,filename="ESgrowth2012","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2013 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2013/CASA-NDVI_201301.tif")
+npp2<-raster("2013/CASA-NDVI_201302.tif")
+npp3<-raster("2013/CASA-NDVI_201303.tif")
+npp4<-raster("2013/CASA-NDVI_201304.tif")
+npp5<-raster("2013/CASA-NDVI_201305.tif")
+npp6<-raster("2013/CASA-NDVI_201306.tif")
+npp7<-raster("2013/CASA-NDVI_201307.tif")
+npp8<-raster("2013/CASA-NDVI_201308.tif")
+npp9<-raster("2013/CASA-NDVI_201309.tif")
+npp10<-raster("2013/CASA-NDVI_201310.tif")
+npp11<-raster("2013/CASA-NDVI_201311.tif")
+npp12<-raster("2013/CASA-NDVI_201312.tif")
+
+#cumulated NPP
+spr2013<-npp3+npp4+npp5
+sum2013<-npp6+npp7+npp8
+aut2013<-npp9+npp10+npp11
+win2013<-npp12+npp1+npp2
+growth2013<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2013<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2013,filename="nppspr2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2013,filename="nppsum2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2013,filename="nppaut2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2013,filename="nppwin2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2013,filename="nppgrowth2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2013,filename="npp2013","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2013<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2013<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2013<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2013<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2013<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2013,filename="ESspr2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2013,filename="ESsum2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2013,filename="ESaut2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2013,filename="ESwin2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2013,filename="ESgrowth2013","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2014 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2014/CASA-NDVI_201401.tif")
+npp2<-raster("2014/CASA-NDVI_201402.tif")
+npp3<-raster("2014/CASA-NDVI_201403.tif")
+npp4<-raster("2014/CASA-NDVI_201404.tif")
+npp5<-raster("2014/CASA-NDVI_201405.tif")
+npp6<-raster("2014/CASA-NDVI_201406.tif")
+npp7<-raster("2014/CASA-NDVI_201407.tif")
+npp8<-raster("2014/CASA-NDVI_201408.tif")
+npp9<-raster("2014/CASA-NDVI_201409.tif")
+npp10<-raster("2014/CASA-NDVI_201410.tif")
+npp11<-raster("2014/CASA-NDVI_201411.tif")
+npp12<-raster("2014/CASA-NDVI_201412.tif")
+
+#cumulated NPP
+spr2014<-npp3+npp4+npp5
+sum2014<-npp6+npp7+npp8
+aut2014<-npp9+npp10+npp11
+win2014<-npp12+npp1+npp2
+growth2014<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2014<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2014,filename="nppspr2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2014,filename="nppsum2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2014,filename="nppaut2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2014,filename="nppwin2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2014,filename="nppgrowth2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2014,filename="npp2014","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2014<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2014<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2014<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2014<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2014<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2014,filename="ESspr2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2014,filename="ESsum2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2014,filename="ESaut2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2014,filename="ESwin2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2014,filename="ESgrowth2014","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2015 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2015/CASA-NDVI_201501.tif")
+npp2<-raster("2015/CASA-NDVI_201502.tif")
+npp3<-raster("2015/CASA-NDVI_201503.tif")
+npp4<-raster("2015/CASA-NDVI_201504.tif")
+npp5<-raster("2015/CASA-NDVI_201505.tif")
+npp6<-raster("2015/CASA-NDVI_201506.tif")
+npp7<-raster("2015/CASA-NDVI_201507.tif")
+npp8<-raster("2015/CASA-NDVI_201508.tif")
+npp9<-raster("2015/CASA-NDVI_201509.tif")
+npp10<-raster("2015/CASA-NDVI_201510.tif")
+npp11<-raster("2015/CASA-NDVI_201511.tif")
+npp12<-raster("2015/CASA-NDVI_201512.tif")
+
+#cumulated NPP
+spr2015<-npp3+npp4+npp5
+sum2015<-npp6+npp7+npp8
+aut2015<-npp9+npp10+npp11
+win2015<-npp12+npp1+npp2
+growth2015<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2015<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2015,filename="nppspr2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2015,filename="nppsum2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2015,filename="nppaut2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2015,filename="nppwin2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2015,filename="nppgrowth2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2015,filename="npp2015","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+sd1 <- calc(s1, fun=function(x) sd(x))
+ESspr2015<-(npp3+npp4+npp5)/3/sd1
+
+s2 <- stack(npp6,npp7,npp8)
+sd2 <- calc(s2, fun=function(x) sd(x))
+ESsum2015<-(npp6+npp7+npp8)/3/sd2
+
+s3 <- stack(npp9,npp10,npp11)
+sd3 <- calc(s3, fun=function(x) sd(x))
+ESaut2015<-(npp9+npp10+npp11)/3/sd3
+
+s4 <- stack(npp12,npp1,npp2)
+sd4 <- calc(s4, fun=function(x) sd(x))
+ESwin2015<-(npp12+npp1+npp2)/3/sd4
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+sd5 <- calc(s5, fun=function(x) sd(x))
+ESgrowth2015<-(npp4+npp5+npp6+npp7+npp8+npp9+npp10)/7/sd5
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2015,filename="ESspr2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2015,filename="ESsum2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2015,filename="ESaut2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2015,filename="ESwin2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2015,filename="ESgrowth2015","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+gc()
+
+############################################################################
+
+
+
+##########################################################################################################
+# ES all years
+# ES spr
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+
+nppspr2000<-raster("nppspr2000.tif")
+nppspr2001<-raster("nppspr2001.tif")
+nppspr2002<-raster("nppspr2002.tif")
+nppspr2003<-raster("nppspr2003.tif")
+nppspr2004<-raster("nppspr2004.tif")
+nppspr2005<-raster("nppspr2005.tif")
+nppspr2006<-raster("nppspr2006.tif")
+nppspr2007<-raster("nppspr2007.tif")
+nppspr2008<-raster("nppspr2008.tif")
+nppspr2009<-raster("nppspr2009.tif")
+nppspr2010<-raster("nppspr2010.tif")
+nppspr2011<-raster("nppspr2011.tif")
+nppspr2012<-raster("nppspr2012.tif")
+nppspr2013<-raster("nppspr2013.tif")
+nppspr2014<-raster("nppspr2014.tif")
+nppspr2015<-raster("nppspr2015.tif")
+
+sspr <- stack(nppspr2000,nppspr2001,nppspr2002,nppspr2003,nppspr2004,nppspr2005,nppspr2006,nppspr2007,nppspr2008,nppspr2009,nppspr2010,nppspr2011,nppspr2012,nppspr2013,nppspr2014,nppspr2015)
+sdspr <- calc(sspr, fun=function(x) sd(x))
+ESspr<-(nppspr2000+nppspr2001+nppspr2002+nppspr2003+nppspr2004+nppspr2005+nppspr2006+nppspr2007+nppspr2008+nppspr2009+nppspr2010+nppspr2011+nppspr2012+nppspr2013+nppspr2014+nppspr2015)/16/sdspr
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_allYear")
+writeRaster(ESspr,filename="ESspr","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES sum
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+
+nppsum2000<-raster("nppsum2000.tif")
+nppsum2001<-raster("nppsum2001.tif")
+nppsum2002<-raster("nppsum2002.tif")
+nppsum2003<-raster("nppsum2003.tif")
+nppsum2004<-raster("nppsum2004.tif")
+nppsum2005<-raster("nppsum2005.tif")
+nppsum2006<-raster("nppsum2006.tif")
+nppsum2007<-raster("nppsum2007.tif")
+nppsum2008<-raster("nppsum2008.tif")
+nppsum2009<-raster("nppsum2009.tif")
+nppsum2010<-raster("nppsum2010.tif")
+nppsum2011<-raster("nppsum2011.tif")
+nppsum2012<-raster("nppsum2012.tif")
+nppsum2013<-raster("nppsum2013.tif")
+nppsum2014<-raster("nppsum2014.tif")
+nppsum2015<-raster("nppsum2015.tif")
+
+ssum <- stack(nppsum2000,nppsum2001,nppsum2002,nppsum2003,nppsum2004,nppsum2005,nppsum2006,nppsum2007,nppsum2008,nppsum2009,nppsum2010,nppsum2011,nppsum2012,nppsum2013,nppsum2014,nppsum2015)
+sdsum <- calc(ssum, fun=function(x) sd(x))
+ESsum<-(nppsum2000+nppsum2001+nppsum2002+nppsum2003+nppsum2004+nppsum2005+nppsum2006+nppsum2007+nppsum2008+nppsum2009+nppsum2010+nppsum2011+nppsum2012+nppsum2013+nppsum2014+nppsum2015)/16/sdsum
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_allYear")
+writeRaster(ESsum,filename="ESsum","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES aut
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+
+nppaut2000<-raster("nppaut2000.tif")
+nppaut2001<-raster("nppaut2001.tif")
+nppaut2002<-raster("nppaut2002.tif")
+nppaut2003<-raster("nppaut2003.tif")
+nppaut2004<-raster("nppaut2004.tif")
+nppaut2005<-raster("nppaut2005.tif")
+nppaut2006<-raster("nppaut2006.tif")
+nppaut2007<-raster("nppaut2007.tif")
+nppaut2008<-raster("nppaut2008.tif")
+nppaut2009<-raster("nppaut2009.tif")
+nppaut2010<-raster("nppaut2010.tif")
+nppaut2011<-raster("nppaut2011.tif")
+nppaut2012<-raster("nppaut2012.tif")
+nppaut2013<-raster("nppaut2013.tif")
+nppaut2014<-raster("nppaut2014.tif")
+nppaut2015<-raster("nppaut2015.tif")
+
+saut <- stack(nppaut2000,nppaut2001,nppaut2002,nppaut2003,nppaut2004,nppaut2005,nppaut2006,nppaut2007,nppaut2008,nppaut2009,nppaut2010,nppaut2011,nppaut2012,nppaut2013,nppaut2014,nppaut2015)
+sdaut <- calc(saut, fun=function(x) sd(x))
+ESaut<-(nppaut2000+nppaut2001+nppaut2002+nppaut2003+nppaut2004+nppaut2005+nppaut2006+nppaut2007+nppaut2008+nppaut2009+nppaut2010+nppaut2011+nppaut2012+nppaut2013+nppaut2014+nppaut2015)/16/sdaut
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_allYear")
+writeRaster(ESaut,filename="ESaut","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES win
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+
+nppwin2000<-raster("nppwin2000.tif")
+nppwin2001<-raster("nppwin2001.tif")
+nppwin2002<-raster("nppwin2002.tif")
+nppwin2003<-raster("nppwin2003.tif")
+nppwin2004<-raster("nppwin2004.tif")
+nppwin2005<-raster("nppwin2005.tif")
+nppwin2006<-raster("nppwin2006.tif")
+nppwin2007<-raster("nppwin2007.tif")
+nppwin2008<-raster("nppwin2008.tif")
+nppwin2009<-raster("nppwin2009.tif")
+nppwin2010<-raster("nppwin2010.tif")
+nppwin2011<-raster("nppwin2011.tif")
+nppwin2012<-raster("nppwin2012.tif")
+nppwin2013<-raster("nppwin2013.tif")
+nppwin2014<-raster("nppwin2014.tif")
+nppwin2015<-raster("nppwin2015.tif")
+
+swin <- stack(nppwin2000,nppwin2001,nppwin2002,nppwin2003,nppwin2004,nppwin2005,nppwin2006,nppwin2007,nppwin2008,nppwin2009,nppwin2010,nppwin2011,nppwin2012,nppwin2013,nppwin2014,nppwin2015)
+sdwin <- calc(swin, fun=function(x) sd(x))
+ESwin<-(nppwin2000+nppwin2001+nppwin2002+nppwin2003+nppwin2004+nppwin2005+nppwin2006+nppwin2007+nppwin2008+nppwin2009+nppwin2010+nppwin2011+nppwin2012+nppwin2013+nppwin2014+nppwin2015)/16/sdwin
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_allYear")
+writeRaster(ESwin,filename="ESwin","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES growth
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+
+nppgrowth2000<-raster("nppgrowth2000.tif")
+nppgrowth2001<-raster("nppgrowth2001.tif")
+nppgrowth2002<-raster("nppgrowth2002.tif")
+nppgrowth2003<-raster("nppgrowth2003.tif")
+nppgrowth2004<-raster("nppgrowth2004.tif")
+nppgrowth2005<-raster("nppgrowth2005.tif")
+nppgrowth2006<-raster("nppgrowth2006.tif")
+nppgrowth2007<-raster("nppgrowth2007.tif")
+nppgrowth2008<-raster("nppgrowth2008.tif")
+nppgrowth2009<-raster("nppgrowth2009.tif")
+nppgrowth2010<-raster("nppgrowth2010.tif")
+nppgrowth2011<-raster("nppgrowth2011.tif")
+nppgrowth2012<-raster("nppgrowth2012.tif")
+nppgrowth2013<-raster("nppgrowth2013.tif")
+nppgrowth2014<-raster("nppgrowth2014.tif")
+nppgrowth2015<-raster("nppgrowth2015.tif")
+
+sgrowth <- stack(nppgrowth2000,nppgrowth2001,nppgrowth2002,nppgrowth2003,nppgrowth2004,nppgrowth2005,nppgrowth2006,nppgrowth2007,nppgrowth2008,nppgrowth2009,nppgrowth2010,nppgrowth2011,nppgrowth2012,nppgrowth2013,nppgrowth2014,nppgrowth2015)
+sdgrowth <- calc(sgrowth, fun=function(x) sd(x))
+ESgrowth<-(nppgrowth2000+nppgrowth2001+nppgrowth2002+nppgrowth2003+nppgrowth2004+nppgrowth2005+nppgrowth2006+nppgrowth2007+nppgrowth2008+nppgrowth2009+nppgrowth2010+nppgrowth2011+nppgrowth2012+nppgrowth2013+nppgrowth2014+nppgrowth2015)/16/sdgrowth
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_allYear")
+writeRaster(ESgrowth,filename="ESgrowth","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES 
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+
+npp2000<-raster("npp2000.tif")
+npp2001<-raster("npp2001.tif")
+npp2002<-raster("npp2002.tif")
+npp2003<-raster("npp2003.tif")
+npp2004<-raster("npp2004.tif")
+npp2005<-raster("npp2005.tif")
+npp2006<-raster("npp2006.tif")
+npp2007<-raster("npp2007.tif")
+npp2008<-raster("npp2008.tif")
+npp2009<-raster("npp2009.tif")
+npp2010<-raster("npp2010.tif")
+npp2011<-raster("npp2011.tif")
+npp2012<-raster("npp2012.tif")
+npp2013<-raster("npp2013.tif")
+npp2014<-raster("npp2014.tif")
+npp2015<-raster("npp2015.tif")
+
+s <- stack(npp2000,npp2001,npp2002,npp2003,npp2004,npp2005,npp2006,npp2007,npp2008,npp2009,npp2010,npp2011,npp2012,npp2013,npp2014,npp2015)
+sd <- calc(s, fun=function(x) sd(x))
+ES<-(npp2000+npp2001+npp2002+npp2003+npp2004+npp2005+npp2006+npp2007+npp2008+npp2009+npp2010+npp2011+npp2012+npp2013+npp2014+npp2015)16/sd
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_annual_allYear")
+writeRaster(ES,filename="ES","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+gc()
+
+#####################
+
+##### ES newly estimated by cv() ##########
+######## 2000 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2000/CASA-NDVI_200001.tif")
+npp2<-raster("2000/CASA-NDVI_200002.tif")
+npp3<-raster("2000/CASA-NDVI_200003.tif")
+npp4<-raster("2000/CASA-NDVI_200004.tif")
+npp5<-raster("2000/CASA-NDVI_200005.tif")
+npp6<-raster("2000/CASA-NDVI_200006.tif")
+npp7<-raster("2000/CASA-NDVI_200007.tif")
+npp8<-raster("2000/CASA-NDVI_200008.tif")
+npp9<-raster("2000/CASA-NDVI_200009.tif")
+npp10<-raster("2000/CASA-NDVI_200010.tif")
+npp11<-raster("2000/CASA-NDVI_200011.tif")
+npp12<-raster("2000/CASA-NDVI_200012.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2000<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2000<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2000<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2000<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2000<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2000,filename="ESspr2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2000,filename="ESsum2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2000,filename="ESaut2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2000,filename="ESwin2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2000,filename="ESgrowth2000","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2001 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2001/CASA-NDVI_200101.tif")
+npp2<-raster("2001/CASA-NDVI_200102.tif")
+npp3<-raster("2001/CASA-NDVI_200103.tif")
+npp4<-raster("2001/CASA-NDVI_200104.tif")
+npp5<-raster("2001/CASA-NDVI_200105.tif")
+npp6<-raster("2001/CASA-NDVI_200106.tif")
+npp7<-raster("2001/CASA-NDVI_200107.tif")
+npp8<-raster("2001/CASA-NDVI_200108.tif")
+npp9<-raster("2001/CASA-NDVI_200109.tif")
+npp10<-raster("2001/CASA-NDVI_200110.tif")
+npp11<-raster("2001/CASA-NDVI_200111.tif")
+npp12<-raster("2001/CASA-NDVI_200112.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2001<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2001<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2001<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2001<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2001<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2001,filename="ESspr2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2001,filename="ESsum2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2001,filename="ESaut2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2001,filename="ESwin2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2001,filename="ESgrowth2001","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2002 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2002/CASA-NDVI_200201.tif")
+npp2<-raster("2002/CASA-NDVI_200202.tif")
+npp3<-raster("2002/CASA-NDVI_200203.tif")
+npp4<-raster("2002/CASA-NDVI_200204.tif")
+npp5<-raster("2002/CASA-NDVI_200205.tif")
+npp6<-raster("2002/CASA-NDVI_200206.tif")
+npp7<-raster("2002/CASA-NDVI_200207.tif")
+npp8<-raster("2002/CASA-NDVI_200208.tif")
+npp9<-raster("2002/CASA-NDVI_200209.tif")
+npp10<-raster("2002/CASA-NDVI_200210.tif")
+npp11<-raster("2002/CASA-NDVI_200211.tif")
+npp12<-raster("2002/CASA-NDVI_200212.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2002<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2002<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2002<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2002<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2002<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2002,filename="ESspr2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2002,filename="ESsum2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2002,filename="ESaut2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2002,filename="ESwin2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2002,filename="ESgrowth2002","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2003 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2003/CASA-NDVI_200301.tif")
+npp2<-raster("2003/CASA-NDVI_200302.tif")
+npp3<-raster("2003/CASA-NDVI_200303.tif")
+npp4<-raster("2003/CASA-NDVI_200304.tif")
+npp5<-raster("2003/CASA-NDVI_200305.tif")
+npp6<-raster("2003/CASA-NDVI_200306.tif")
+npp7<-raster("2003/CASA-NDVI_200307.tif")
+npp8<-raster("2003/CASA-NDVI_200308.tif")
+npp9<-raster("2003/CASA-NDVI_200309.tif")
+npp10<-raster("2003/CASA-NDVI_200310.tif")
+npp11<-raster("2003/CASA-NDVI_200311.tif")
+npp12<-raster("2003/CASA-NDVI_200312.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2003<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2003<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2003<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2003<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2003<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2003,filename="ESspr2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2003,filename="ESsum2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2003,filename="ESaut2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2003,filename="ESwin2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2003,filename="ESgrowth2003","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2004 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2004/CASA-NDVI_200401.tif")
+npp2<-raster("2004/CASA-NDVI_200402.tif")
+npp3<-raster("2004/CASA-NDVI_200403.tif")
+npp4<-raster("2004/CASA-NDVI_200404.tif")
+npp5<-raster("2004/CASA-NDVI_200405.tif")
+npp6<-raster("2004/CASA-NDVI_200406.tif")
+npp7<-raster("2004/CASA-NDVI_200407.tif")
+npp8<-raster("2004/CASA-NDVI_200408.tif")
+npp9<-raster("2004/CASA-NDVI_200409.tif")
+npp10<-raster("2004/CASA-NDVI_200410.tif")
+npp11<-raster("2004/CASA-NDVI_200411.tif")
+npp12<-raster("2004/CASA-NDVI_200412.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2004<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2004<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2004<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2004<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2004<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2004,filename="ESspr2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2004,filename="ESsum2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2004,filename="ESaut2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2004,filename="ESwin2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2004,filename="ESgrowth2004","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2005 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2005/CASA-NDVI_200501.tif")
+npp2<-raster("2005/CASA-NDVI_200502.tif")
+npp3<-raster("2005/CASA-NDVI_200503.tif")
+npp4<-raster("2005/CASA-NDVI_200504.tif")
+npp5<-raster("2005/CASA-NDVI_200505.tif")
+npp6<-raster("2005/CASA-NDVI_200506.tif")
+npp7<-raster("2005/CASA-NDVI_200507.tif")
+npp8<-raster("2005/CASA-NDVI_200508.tif")
+npp9<-raster("2005/CASA-NDVI_200509.tif")
+npp10<-raster("2005/CASA-NDVI_200510.tif")
+npp11<-raster("2005/CASA-NDVI_200511.tif")
+npp12<-raster("2005/CASA-NDVI_200512.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2005<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2005<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2005<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2005<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2005<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2005,filename="ESspr2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2005,filename="ESsum2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2005,filename="ESaut2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2005,filename="ESwin2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2005,filename="ESgrowth2005","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2006 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2006/CASA-NDVI_200601.tif")
+npp2<-raster("2006/CASA-NDVI_200602.tif")
+npp3<-raster("2006/CASA-NDVI_200603.tif")
+npp4<-raster("2006/CASA-NDVI_200604.tif")
+npp5<-raster("2006/CASA-NDVI_200605.tif")
+npp6<-raster("2006/CASA-NDVI_200606.tif")
+npp7<-raster("2006/CASA-NDVI_200607.tif")
+npp8<-raster("2006/CASA-NDVI_200608.tif")
+npp9<-raster("2006/CASA-NDVI_200609.tif")
+npp10<-raster("2006/CASA-NDVI_200610.tif")
+npp11<-raster("2006/CASA-NDVI_200611.tif")
+npp12<-raster("2006/CASA-NDVI_200612.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2006<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2006<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2006<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2006<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2006<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2006,filename="ESspr2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2006,filename="ESsum2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2006,filename="ESaut2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2006,filename="ESwin2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2006,filename="ESgrowth2006","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2007 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2007/CASA-NDVI_200701.tif")
+npp2<-raster("2007/CASA-NDVI_200702.tif")
+npp3<-raster("2007/CASA-NDVI_200703.tif")
+npp4<-raster("2007/CASA-NDVI_200704.tif")
+npp5<-raster("2007/CASA-NDVI_200705.tif")
+npp6<-raster("2007/CASA-NDVI_200706.tif")
+npp7<-raster("2007/CASA-NDVI_200707.tif")
+npp8<-raster("2007/CASA-NDVI_200708.tif")
+npp9<-raster("2007/CASA-NDVI_200709.tif")
+npp10<-raster("2007/CASA-NDVI_200710.tif")
+npp11<-raster("2007/CASA-NDVI_200711.tif")
+npp12<-raster("2007/CASA-NDVI_200712.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2007<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2007<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2007<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2007<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2007<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2007,filename="ESspr2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2007,filename="ESsum2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2007,filename="ESaut2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2007,filename="ESwin2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2007,filename="ESgrowth2007","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2008 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2008/CASA-NDVI_200801.tif")
+npp2<-raster("2008/CASA-NDVI_200802.tif")
+npp3<-raster("2008/CASA-NDVI_200803.tif")
+npp4<-raster("2008/CASA-NDVI_200804.tif")
+npp5<-raster("2008/CASA-NDVI_200805.tif")
+npp6<-raster("2008/CASA-NDVI_200806.tif")
+npp7<-raster("2008/CASA-NDVI_200807.tif")
+npp8<-raster("2008/CASA-NDVI_200808.tif")
+npp9<-raster("2008/CASA-NDVI_200809.tif")
+npp10<-raster("2008/CASA-NDVI_200810.tif")
+npp11<-raster("2008/CASA-NDVI_200811.tif")
+npp12<-raster("2008/CASA-NDVI_200812.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2008<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2008<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2008<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2008<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2008<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2008,filename="ESspr2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2008,filename="ESsum2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2008,filename="ESaut2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2008,filename="ESwin2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2008,filename="ESgrowth2008","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2009 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2009/CASA-NDVI_200901.tif")
+npp2<-raster("2009/CASA-NDVI_200902.tif")
+npp3<-raster("2009/CASA-NDVI_200903.tif")
+npp4<-raster("2009/CASA-NDVI_200904.tif")
+npp5<-raster("2009/CASA-NDVI_200905.tif")
+npp6<-raster("2009/CASA-NDVI_200906.tif")
+npp7<-raster("2009/CASA-NDVI_200907.tif")
+npp8<-raster("2009/CASA-NDVI_200908.tif")
+npp9<-raster("2009/CASA-NDVI_200909.tif")
+npp10<-raster("2009/CASA-NDVI_200910.tif")
+npp11<-raster("2009/CASA-NDVI_200911.tif")
+npp12<-raster("2009/CASA-NDVI_200912.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2009<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2009<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2009<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2009<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2009<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2009,filename="ESspr2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2009,filename="ESsum2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2009,filename="ESaut2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2009,filename="ESwin2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2009,filename="ESgrowth2009","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2010 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2010/CASA-NDVI_201001.tif")
+npp2<-raster("2010/CASA-NDVI_201002.tif")
+npp3<-raster("2010/CASA-NDVI_201003.tif")
+npp4<-raster("2010/CASA-NDVI_201004.tif")
+npp5<-raster("2010/CASA-NDVI_201005.tif")
+npp6<-raster("2010/CASA-NDVI_201006.tif")
+npp7<-raster("2010/CASA-NDVI_201007.tif")
+npp8<-raster("2010/CASA-NDVI_201008.tif")
+npp9<-raster("2010/CASA-NDVI_201009.tif")
+npp10<-raster("2010/CASA-NDVI_201010.tif")
+npp11<-raster("2010/CASA-NDVI_201011.tif")
+npp12<-raster("2010/CASA-NDVI_201012.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2010<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2010<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2010<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2010<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2010<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2010,filename="ESspr2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2010,filename="ESsum2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2010,filename="ESaut2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2010,filename="ESwin2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2010,filename="ESgrowth2010","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2011 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2011/CASA-NDVI_201101.tif")
+npp2<-raster("2011/CASA-NDVI_201102.tif")
+npp3<-raster("2011/CASA-NDVI_201103.tif")
+npp4<-raster("2011/CASA-NDVI_201104.tif")
+npp5<-raster("2011/CASA-NDVI_201105.tif")
+npp6<-raster("2011/CASA-NDVI_201106.tif")
+npp7<-raster("2011/CASA-NDVI_201107.tif")
+npp8<-raster("2011/CASA-NDVI_201108.tif")
+npp9<-raster("2011/CASA-NDVI_201109.tif")
+npp10<-raster("2011/CASA-NDVI_201110.tif")
+npp11<-raster("2011/CASA-NDVI_201111.tif")
+npp12<-raster("2011/CASA-NDVI_201112.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2011<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2011<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2011<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2011<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2011<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2011,filename="ESspr2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2011,filename="ESsum2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2011,filename="ESaut2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2011,filename="ESwin2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2011,filename="ESgrowth2011","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2012 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2012/CASA-NDVI_201201.tif")
+npp2<-raster("2012/CASA-NDVI_201202.tif")
+npp3<-raster("2012/CASA-NDVI_201203.tif")
+npp4<-raster("2012/CASA-NDVI_201204.tif")
+npp5<-raster("2012/CASA-NDVI_201205.tif")
+npp6<-raster("2012/CASA-NDVI_201206.tif")
+npp7<-raster("2012/CASA-NDVI_201207.tif")
+npp8<-raster("2012/CASA-NDVI_201208.tif")
+npp9<-raster("2012/CASA-NDVI_201209.tif")
+npp10<-raster("2012/CASA-NDVI_201210.tif")
+npp11<-raster("2012/CASA-NDVI_201211.tif")
+npp12<-raster("2012/CASA-NDVI_201212.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2012<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2012<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2012<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2012<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2012<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2012,filename="ESspr2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2012,filename="ESsum2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2012,filename="ESaut2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2012,filename="ESwin2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2012,filename="ESgrowth2012","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2013 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2013/CASA-NDVI_201301.tif")
+npp2<-raster("2013/CASA-NDVI_201302.tif")
+npp3<-raster("2013/CASA-NDVI_201303.tif")
+npp4<-raster("2013/CASA-NDVI_201304.tif")
+npp5<-raster("2013/CASA-NDVI_201305.tif")
+npp6<-raster("2013/CASA-NDVI_201306.tif")
+npp7<-raster("2013/CASA-NDVI_201307.tif")
+npp8<-raster("2013/CASA-NDVI_201308.tif")
+npp9<-raster("2013/CASA-NDVI_201309.tif")
+npp10<-raster("2013/CASA-NDVI_201310.tif")
+npp11<-raster("2013/CASA-NDVI_201311.tif")
+npp12<-raster("2013/CASA-NDVI_201312.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2013<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2013<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2013<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2013<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2013<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2013,filename="ESspr2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2013,filename="ESsum2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2013,filename="ESaut2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2013,filename="ESwin2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2013,filename="ESgrowth2013","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2014 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2014/CASA-NDVI_201401.tif")
+npp2<-raster("2014/CASA-NDVI_201402.tif")
+npp3<-raster("2014/CASA-NDVI_201403.tif")
+npp4<-raster("2014/CASA-NDVI_201404.tif")
+npp5<-raster("2014/CASA-NDVI_201405.tif")
+npp6<-raster("2014/CASA-NDVI_201406.tif")
+npp7<-raster("2014/CASA-NDVI_201407.tif")
+npp8<-raster("2014/CASA-NDVI_201408.tif")
+npp9<-raster("2014/CASA-NDVI_201409.tif")
+npp10<-raster("2014/CASA-NDVI_201410.tif")
+npp11<-raster("2014/CASA-NDVI_201411.tif")
+npp12<-raster("2014/CASA-NDVI_201412.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2014<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2014<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2014<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2014<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2014<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2014,filename="ESspr2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2014,filename="ESsum2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2014,filename="ESaut2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2014,filename="ESwin2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2014,filename="ESgrowth2014","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2015 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2015/CASA-NDVI_201501.tif")
+npp2<-raster("2015/CASA-NDVI_201502.tif")
+npp3<-raster("2015/CASA-NDVI_201503.tif")
+npp4<-raster("2015/CASA-NDVI_201504.tif")
+npp5<-raster("2015/CASA-NDVI_201505.tif")
+npp6<-raster("2015/CASA-NDVI_201506.tif")
+npp7<-raster("2015/CASA-NDVI_201507.tif")
+npp8<-raster("2015/CASA-NDVI_201508.tif")
+npp9<-raster("2015/CASA-NDVI_201509.tif")
+npp10<-raster("2015/CASA-NDVI_201510.tif")
+npp11<-raster("2015/CASA-NDVI_201511.tif")
+npp12<-raster("2015/CASA-NDVI_201512.tif")
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2015<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2015<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2015<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2015<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2015<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2015,filename="ESspr2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2015,filename="ESsum2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2015,filename="ESaut2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2015,filename="ESwin2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2015,filename="ESgrowth2015","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+gc()
+
+#############################################################################
+
+# ES all years
+# ES spr
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+
+nppspr2000<-raster("nppspr2000.tif")
+nppspr2001<-raster("nppspr2001.tif")
+nppspr2002<-raster("nppspr2002.tif")
+nppspr2003<-raster("nppspr2003.tif")
+nppspr2004<-raster("nppspr2004.tif")
+nppspr2005<-raster("nppspr2005.tif")
+nppspr2006<-raster("nppspr2006.tif")
+nppspr2007<-raster("nppspr2007.tif")
+nppspr2008<-raster("nppspr2008.tif")
+nppspr2009<-raster("nppspr2009.tif")
+nppspr2010<-raster("nppspr2010.tif")
+nppspr2011<-raster("nppspr2011.tif")
+nppspr2012<-raster("nppspr2012.tif")
+nppspr2013<-raster("nppspr2013.tif")
+nppspr2014<-raster("nppspr2014.tif")
+nppspr2015<-raster("nppspr2015.tif")
+
+sspr <- stack(nppspr2000,nppspr2001,nppspr2002,nppspr2003,nppspr2004,nppspr2005,nppspr2006,nppspr2007,nppspr2008,nppspr2009,nppspr2010,nppspr2011,nppspr2012,nppspr2013,nppspr2014,nppspr2015)
+ESspr<- 1/cv(sspr)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_allYear")
+writeRaster(ESspr,filename="ESspr","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES sum
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+
+nppsum2000<-raster("nppsum2000.tif")
+nppsum2001<-raster("nppsum2001.tif")
+nppsum2002<-raster("nppsum2002.tif")
+nppsum2003<-raster("nppsum2003.tif")
+nppsum2004<-raster("nppsum2004.tif")
+nppsum2005<-raster("nppsum2005.tif")
+nppsum2006<-raster("nppsum2006.tif")
+nppsum2007<-raster("nppsum2007.tif")
+nppsum2008<-raster("nppsum2008.tif")
+nppsum2009<-raster("nppsum2009.tif")
+nppsum2010<-raster("nppsum2010.tif")
+nppsum2011<-raster("nppsum2011.tif")
+nppsum2012<-raster("nppsum2012.tif")
+nppsum2013<-raster("nppsum2013.tif")
+nppsum2014<-raster("nppsum2014.tif")
+nppsum2015<-raster("nppsum2015.tif")
+
+ssum <- stack(nppsum2000,nppsum2001,nppsum2002,nppsum2003,nppsum2004,nppsum2005,nppsum2006,nppsum2007,nppsum2008,nppsum2009,nppsum2010,nppsum2011,nppsum2012,nppsum2013,nppsum2014,nppsum2015)
+ESsum<- 1/cv(ssum)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_allYear")
+writeRaster(ESsum,filename="ESsum","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES aut
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+
+nppaut2000<-raster("nppaut2000.tif")
+nppaut2001<-raster("nppaut2001.tif")
+nppaut2002<-raster("nppaut2002.tif")
+nppaut2003<-raster("nppaut2003.tif")
+nppaut2004<-raster("nppaut2004.tif")
+nppaut2005<-raster("nppaut2005.tif")
+nppaut2006<-raster("nppaut2006.tif")
+nppaut2007<-raster("nppaut2007.tif")
+nppaut2008<-raster("nppaut2008.tif")
+nppaut2009<-raster("nppaut2009.tif")
+nppaut2010<-raster("nppaut2010.tif")
+nppaut2011<-raster("nppaut2011.tif")
+nppaut2012<-raster("nppaut2012.tif")
+nppaut2013<-raster("nppaut2013.tif")
+nppaut2014<-raster("nppaut2014.tif")
+nppaut2015<-raster("nppaut2015.tif")
+
+saut <- stack(nppaut2000,nppaut2001,nppaut2002,nppaut2003,nppaut2004,nppaut2005,nppaut2006,nppaut2007,nppaut2008,nppaut2009,nppaut2010,nppaut2011,nppaut2012,nppaut2013,nppaut2014,nppaut2015)
+ESaut<- 1/cv(saut)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_allYear")
+writeRaster(ESaut,filename="ESaut","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES win
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+
+nppwin2000<-raster("nppwin2000.tif")
+nppwin2001<-raster("nppwin2001.tif")
+nppwin2002<-raster("nppwin2002.tif")
+nppwin2003<-raster("nppwin2003.tif")
+nppwin2004<-raster("nppwin2004.tif")
+nppwin2005<-raster("nppwin2005.tif")
+nppwin2006<-raster("nppwin2006.tif")
+nppwin2007<-raster("nppwin2007.tif")
+nppwin2008<-raster("nppwin2008.tif")
+nppwin2009<-raster("nppwin2009.tif")
+nppwin2010<-raster("nppwin2010.tif")
+nppwin2011<-raster("nppwin2011.tif")
+nppwin2012<-raster("nppwin2012.tif")
+nppwin2013<-raster("nppwin2013.tif")
+nppwin2014<-raster("nppwin2014.tif")
+nppwin2015<-raster("nppwin2015.tif")
+
+swin <- stack(nppwin2000,nppwin2001,nppwin2002,nppwin2003,nppwin2004,nppwin2005,nppwin2006,nppwin2007,nppwin2008,nppwin2009,nppwin2010,nppwin2011,nppwin2012,nppwin2013,nppwin2014,nppwin2015)
+ESwin<- 1/cv(swin)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_allYear")
+writeRaster(ESwin,filename="ESwin","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES growth
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+
+nppgrowth2000<-raster("nppgrowth2000.tif")
+nppgrowth2001<-raster("nppgrowth2001.tif")
+nppgrowth2002<-raster("nppgrowth2002.tif")
+nppgrowth2003<-raster("nppgrowth2003.tif")
+nppgrowth2004<-raster("nppgrowth2004.tif")
+nppgrowth2005<-raster("nppgrowth2005.tif")
+nppgrowth2006<-raster("nppgrowth2006.tif")
+nppgrowth2007<-raster("nppgrowth2007.tif")
+nppgrowth2008<-raster("nppgrowth2008.tif")
+nppgrowth2009<-raster("nppgrowth2009.tif")
+nppgrowth2010<-raster("nppgrowth2010.tif")
+nppgrowth2011<-raster("nppgrowth2011.tif")
+nppgrowth2012<-raster("nppgrowth2012.tif")
+nppgrowth2013<-raster("nppgrowth2013.tif")
+nppgrowth2014<-raster("nppgrowth2014.tif")
+nppgrowth2015<-raster("nppgrowth2015.tif")
+
+sgrowth <- stack(nppgrowth2000,nppgrowth2001,nppgrowth2002,nppgrowth2003,nppgrowth2004,nppgrowth2005,nppgrowth2006,nppgrowth2007,nppgrowth2008,nppgrowth2009,nppgrowth2010,nppgrowth2011,nppgrowth2012,nppgrowth2013,nppgrowth2014,nppgrowth2015)
+ESgrowth<- 1/cv(sgrowth)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_allYear")
+writeRaster(ESgrowth,filename="ESgrowth","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES 
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+
+npp2000<-raster("npp2000.tif")
+npp2001<-raster("npp2001.tif")
+npp2002<-raster("npp2002.tif")
+npp2003<-raster("npp2003.tif")
+npp2004<-raster("npp2004.tif")
+npp2005<-raster("npp2005.tif")
+npp2006<-raster("npp2006.tif")
+npp2007<-raster("npp2007.tif")
+npp2008<-raster("npp2008.tif")
+npp2009<-raster("npp2009.tif")
+npp2010<-raster("npp2010.tif")
+npp2011<-raster("npp2011.tif")
+npp2012<-raster("npp2012.tif")
+npp2013<-raster("npp2013.tif")
+npp2014<-raster("npp2014.tif")
+npp2015<-raster("npp2015.tif")
+
+s <- stack(npp2000,npp2001,npp2002,npp2003,npp2004,npp2005,npp2006,npp2007,npp2008,npp2009,npp2010,npp2011,npp2012,npp2013,npp2014,npp2015)
+ES<-1/cv(s)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_annual_allYear")
+writeRaster(ES,filename="ES","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+gc()
+
+#####################
+
+###################### NPP/ES by season/growth period/year (二) 由PAR重构数据计算 ########################
+library(raster)
+library(rgdal)
+library(maptools)
+library(sp)
+library(gstat)
+library(tcltk)
+library(plotKML)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+dir.create("NPP_spr_cum")
+dir.create("NPP_sum_cum")
+dir.create("NPP_aut_cum")
+dir.create("NPP_win_cum")
+dir.create("NPP_growth_cum")
+dir.create("NPP_annual_cum")
+
+dir.create("ES_spr_perYear")# based on NPP per month
+dir.create("ES_sum_perYear")
+dir.create("ES_aut_perYear")
+dir.create("ES_win_perYear")
+dir.create("ES_growth_perYear")
+#dir.create("ES_annual_perYear")
+
+dir.create("ES_spr_allYear")# based on cumulated NPP
+dir.create("ES_sum_allYear")
+dir.create("ES_aut_allYear")
+dir.create("ES_win_allYear")
+dir.create("ES_growth_allYear")
+dir.create("ES_annual_allYear")
+
+
+
+dir.create("2000")
+dir.create("2001")
+dir.create("2002")
+dir.create("2003")
+dir.create("2004")
+dir.create("2005")
+dir.create("2006")
+dir.create("2007")
+dir.create("2008")
+dir.create("2009")
+dir.create("2010")
+dir.create("2011")
+dir.create("2012")
+dir.create("2013")
+dir.create("2014")
+dir.create("2015")
+
+path<-"D:/CASA/data_proceed/NPP-OUT/NPP_250m"##查看路径
+NPP<-dir(path,pattern=".tif")##查看路径中所有的.tif文件
+NPP<-mixedsort(NPP)
+file.copy(NPP[1:12],"2000")##将所有.tif文件复制进入文件夹
+file.copy(NPP[13:24],"2001")
+file.copy(NPP[25:36],"2002")
+file.copy(NPP[37:48],"2003")
+file.copy(NPP[49:60],"2004")
+file.copy(NPP[61:72],"2005")
+file.copy(NPP[73:84],"2006")
+file.copy(NPP[85:96],"2007")
+file.copy(NPP[97:108],"2008")
+file.copy(NPP[109:120],"2009")
+file.copy(NPP[121:132],"2010")
+file.copy(NPP[133:144],"2011")
+file.copy(NPP[145:156],"2012")
+file.copy(NPP[157:168],"2013")
+file.copy(NPP[169:180],"2014")
+file.copy(NPP[181:192],"2015")
+#file.remove(NPP)##删除原有路径中所有.tif
+
+##### ES newly estimated by cv() ##########
+######## 2000 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2000/CASA-E2000 - 1.tif")
+npp2<-raster("2000/CASA-E2000 - 2.tif")
+npp3<-raster("2000/CASA-E2000 - 3.tif")
+npp4<-raster("2000/CASA-E2000 - 4.tif")
+npp5<-raster("2000/CASA-E2000 - 5.tif")
+npp6<-raster("2000/CASA-E2000 - 6.tif")
+npp7<-raster("2000/CASA-E2000 - 7.tif")
+npp8<-raster("2000/CASA-E2000 - 8.tif")
+npp9<-raster("2000/CASA-E2000 - 9.tif")
+npp10<-raster("2000/CASA-E2000 - 10.tif")
+npp11<-raster("2000/CASA-E2000 - 11.tif")
+npp12<-raster("2000/CASA-E2000 - 12.tif")
+
+#cumulated NPP
+spr2000<-npp3+npp4+npp5
+sum2000<-npp6+npp7+npp8
+aut2000<-npp9+npp10+npp11
+win2000<-npp12+npp1+npp2
+growth2000<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2000<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2000,filename="nppspr2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2000,filename="nppsum2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2000,filename="nppaut2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2000,filename="nppwin2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2000,filename="nppgrowth2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2000,filename="npp2000","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2000<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2000<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2000<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2000<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2000<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2000,filename="ESspr2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2000,filename="ESsum2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2000,filename="ESaut2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2000,filename="ESwin2000","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2000,filename="ESgrowth2000","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2001 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2001/CASA-E2001 - 1.tif")
+npp2<-raster("2001/CASA-E2001 - 2.tif")
+npp3<-raster("2001/CASA-E2001 - 3.tif")
+npp4<-raster("2001/CASA-E2001 - 4.tif")
+npp5<-raster("2001/CASA-E2001 - 5.tif")
+npp6<-raster("2001/CASA-E2001 - 6.tif")
+npp7<-raster("2001/CASA-E2001 - 7.tif")
+npp8<-raster("2001/CASA-E2001 - 8.tif")
+npp9<-raster("2001/CASA-E2001 - 9.tif")
+npp10<-raster("2001/CASA-E2001 - 10.tif")
+npp11<-raster("2001/CASA-E2001 - 11.tif")
+npp12<-raster("2001/CASA-E2001 - 12.tif")
+
+#cumulated NPP
+spr2001<-npp3+npp4+npp5
+sum2001<-npp6+npp7+npp8
+aut2001<-npp9+npp10+npp11
+win2001<-npp12+npp1+npp2
+growth2001<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2001<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2001,filename="nppspr2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2001,filename="nppsum2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2001,filename="nppaut2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2001,filename="nppwin2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2001,filename="nppgrowth2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2001,filename="npp2001","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2001<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2001<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2001<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2001<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2001<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2001,filename="ESspr2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2001,filename="ESsum2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2001,filename="ESaut2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2001,filename="ESwin2001","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2001,filename="ESgrowth2001","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+######## 2002 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2002/CASA-E2002 - 1.tif")
+npp2<-raster("2002/CASA-E2002 - 2.tif")
+npp3<-raster("2002/CASA-E2002 - 3.tif")
+npp4<-raster("2002/CASA-E2002 - 4.tif")
+npp5<-raster("2002/CASA-E2002 - 5.tif")
+npp6<-raster("2002/CASA-E2002 - 6.tif")
+npp7<-raster("2002/CASA-E2002 - 7.tif")
+npp8<-raster("2002/CASA-E2002 - 8.tif")
+npp9<-raster("2002/CASA-E2002 - 9.tif")
+npp10<-raster("2002/CASA-E2002 - 10.tif")
+npp11<-raster("2002/CASA-E2002 - 11.tif")
+npp12<-raster("2002/CASA-E2002 - 12.tif")
+
+#cumulated NPP
+spr2002<-npp3+npp4+npp5
+sum2002<-npp6+npp7+npp8
+aut2002<-npp9+npp10+npp11
+win2002<-npp12+npp1+npp2
+growth2002<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2002<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2002,filename="nppspr2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2002,filename="nppsum2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2002,filename="nppaut2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2002,filename="nppwin2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2002,filename="nppgrowth2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2002,filename="npp2002","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2002<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2002<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2002<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2002<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2002<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2002,filename="ESspr2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2002,filename="ESsum2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2002,filename="ESaut2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2002,filename="ESwin2002","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2002,filename="ESgrowth2002","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+######## 2003 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2003/CASA-E2003 - 1.tif")
+npp2<-raster("2003/CASA-E2003 - 2.tif")
+npp3<-raster("2003/CASA-E2003 - 3.tif")
+npp4<-raster("2003/CASA-E2003 - 4.tif")
+npp5<-raster("2003/CASA-E2003 - 5.tif")
+npp6<-raster("2003/CASA-E2003 - 6.tif")
+npp7<-raster("2003/CASA-E2003 - 7.tif")
+npp8<-raster("2003/CASA-E2003 - 8.tif")
+npp9<-raster("2003/CASA-E2003 - 9.tif")
+npp10<-raster("2003/CASA-E2003 - 10.tif")
+npp11<-raster("2003/CASA-E2003 - 11.tif")
+npp12<-raster("2003/CASA-E2003 - 12.tif")
+
+#cumulated NPP
+spr2003<-npp3+npp4+npp5
+sum2003<-npp6+npp7+npp8
+aut2003<-npp9+npp10+npp11
+win2003<-npp12+npp1+npp2
+growth2003<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2003<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2003,filename="nppspr2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2003,filename="nppsum2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2003,filename="nppaut2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2003,filename="nppwin2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2003,filename="nppgrowth2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2003,filename="npp2003","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2003<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2003<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2003<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2003<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2003<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2003,filename="ESspr2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2003,filename="ESsum2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2003,filename="ESaut2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2003,filename="ESwin2003","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2003,filename="ESgrowth2003","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+######## 2004 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2004/CASA-E2004 - 1.tif")
+npp2<-raster("2004/CASA-E2004 - 2.tif")
+npp3<-raster("2004/CASA-E2004 - 3.tif")
+npp4<-raster("2004/CASA-E2004 - 4.tif")
+npp5<-raster("2004/CASA-E2004 - 5.tif")
+npp6<-raster("2004/CASA-E2004 - 6.tif")
+npp7<-raster("2004/CASA-E2004 - 7.tif")
+npp8<-raster("2004/CASA-E2004 - 8.tif")
+npp9<-raster("2004/CASA-E2004 - 9.tif")
+npp10<-raster("2004/CASA-E2004 - 10.tif")
+npp11<-raster("2004/CASA-E2004 - 11.tif")
+npp12<-raster("2004/CASA-E2004 - 12.tif")
+
+#cumulated NPP
+spr2004<-npp3+npp4+npp5
+sum2004<-npp6+npp7+npp8
+aut2004<-npp9+npp10+npp11
+win2004<-npp12+npp1+npp2
+growth2004<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2004<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2004,filename="nppspr2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2004,filename="nppsum2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2004,filename="nppaut2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2004,filename="nppwin2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2004,filename="nppgrowth2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2004,filename="npp2004","GTiff",overwrite=TRUE)
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2004<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2004<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2004<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2004<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2004<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2004,filename="ESspr2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2004,filename="ESsum2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2004,filename="ESaut2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2004,filename="ESwin2004","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2004,filename="ESgrowth2004","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2005 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2005/CASA-E2005 - 1.tif")
+npp2<-raster("2005/CASA-E2005 - 2.tif")
+npp3<-raster("2005/CASA-E2005 - 3.tif")
+npp4<-raster("2005/CASA-E2005 - 4.tif")
+npp5<-raster("2005/CASA-E2005 - 5.tif")
+npp6<-raster("2005/CASA-E2005 - 6.tif")
+npp7<-raster("2005/CASA-E2005 - 7.tif")
+npp8<-raster("2005/CASA-E2005 - 8.tif")
+npp9<-raster("2005/CASA-E2005 - 9.tif")
+npp10<-raster("2005/CASA-E2005 - 10.tif")
+npp11<-raster("2005/CASA-E2005 - 11.tif")
+npp12<-raster("2005/CASA-E2005 - 12.tif")
+
+#cumulated NPP
+spr2005<-npp3+npp4+npp5
+sum2005<-npp6+npp7+npp8
+aut2005<-npp9+npp10+npp11
+win2005<-npp12+npp1+npp2
+growth2005<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2005<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2005,filename="nppspr2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2005,filename="nppsum2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2005,filename="nppaut2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2005,filename="nppwin2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2005,filename="nppgrowth2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2005,filename="npp2005","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2005<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2005<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2005<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2005<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2005<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2005,filename="ESspr2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2005,filename="ESsum2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2005,filename="ESaut2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2005,filename="ESwin2005","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2005,filename="ESgrowth2005","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2006 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2006/CASA-E2006 - 1.tif")
+npp2<-raster("2006/CASA-E2006 - 2.tif")
+npp3<-raster("2006/CASA-E2006 - 3.tif")
+npp4<-raster("2006/CASA-E2006 - 4.tif")
+npp5<-raster("2006/CASA-E2006 - 5.tif")
+npp6<-raster("2006/CASA-E2006 - 6.tif")
+npp7<-raster("2006/CASA-E2006 - 7.tif")
+npp8<-raster("2006/CASA-E2006 - 8.tif")
+npp9<-raster("2006/CASA-E2006 - 9.tif")
+npp10<-raster("2006/CASA-E2006 - 10.tif")
+npp11<-raster("2006/CASA-E2006 - 11.tif")
+npp12<-raster("2006/CASA-E2006 - 12.tif")
+
+#cumulated NPP
+spr2006<-npp3+npp4+npp5
+sum2006<-npp6+npp7+npp8
+aut2006<-npp9+npp10+npp11
+win2006<-npp12+npp1+npp2
+growth2006<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2006<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2006,filename="nppspr2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2006,filename="nppsum2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2006,filename="nppaut2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2006,filename="nppwin2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2006,filename="nppgrowth2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2006,filename="npp2006","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2006<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2006<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2006<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2006<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2006<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2006,filename="ESspr2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2006,filename="ESsum2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2006,filename="ESaut2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2006,filename="ESwin2006","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2006,filename="ESgrowth2006","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2007 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2007/CASA-E2007 - 1.tif")
+npp2<-raster("2007/CASA-E2007 - 2.tif")
+npp3<-raster("2007/CASA-E2007 - 3.tif")
+npp4<-raster("2007/CASA-E2007 - 4.tif")
+npp5<-raster("2007/CASA-E2007 - 5.tif")
+npp6<-raster("2007/CASA-E2007 - 6.tif")
+npp7<-raster("2007/CASA-E2007 - 7.tif")
+npp8<-raster("2007/CASA-E2007 - 8.tif")
+npp9<-raster("2007/CASA-E2007 - 9.tif")
+npp10<-raster("2007/CASA-E2007 - 10.tif")
+npp11<-raster("2007/CASA-E2007 - 11.tif")
+npp12<-raster("2007/CASA-E2007 - 12.tif")
+
+#cumulated NPP
+spr2007<-npp3+npp4+npp5
+sum2007<-npp6+npp7+npp8
+aut2007<-npp9+npp10+npp11
+win2007<-npp12+npp1+npp2
+growth2007<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2007<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2007,filename="nppspr2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2007,filename="nppsum2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2007,filename="nppaut2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2007,filename="nppwin2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2007,filename="nppgrowth2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2007,filename="npp2007","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2007<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2007<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2007<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2007<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2007<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2007,filename="ESspr2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2007,filename="ESsum2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2007,filename="ESaut2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2007,filename="ESwin2007","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2007,filename="ESgrowth2007","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2008 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2008/CASA-E2008 - 1.tif")
+npp2<-raster("2008/CASA-E2008 - 2.tif")
+npp3<-raster("2008/CASA-E2008 - 3.tif")
+npp4<-raster("2008/CASA-E2008 - 4.tif")
+npp5<-raster("2008/CASA-E2008 - 5.tif")
+npp6<-raster("2008/CASA-E2008 - 6.tif")
+npp7<-raster("2008/CASA-E2008 - 7.tif")
+npp8<-raster("2008/CASA-E2008 - 8.tif")
+npp9<-raster("2008/CASA-E2008 - 9.tif")
+npp10<-raster("2008/CASA-E2008 - 10.tif")
+npp11<-raster("2008/CASA-E2008 - 11.tif")
+npp12<-raster("2008/CASA-E2008 - 12.tif")
+
+#cumulated NPP
+spr2008<-npp3+npp4+npp5
+sum2008<-npp6+npp7+npp8
+aut2008<-npp9+npp10+npp11
+win2008<-npp12+npp1+npp2
+growth2008<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2008<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2008,filename="nppspr2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2008,filename="nppsum2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2008,filename="nppaut2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2008,filename="nppwin2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2008,filename="nppgrowth2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2008,filename="npp2008","GTiff",overwrite=TRUE)
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2008<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2008<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2008<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2008<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2008<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2008,filename="ESspr2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2008,filename="ESsum2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2008,filename="ESaut2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2008,filename="ESwin2008","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2008,filename="ESgrowth2008","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2009 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2009/CASA-E2009 - 1.tif")
+npp2<-raster("2009/CASA-E2009 - 2.tif")
+npp3<-raster("2009/CASA-E2009 - 3.tif")
+npp4<-raster("2009/CASA-E2009 - 4.tif")
+npp5<-raster("2009/CASA-E2009 - 5.tif")
+npp6<-raster("2009/CASA-E2009 - 6.tif")
+npp7<-raster("2009/CASA-E2009 - 7.tif")
+npp8<-raster("2009/CASA-E2009 - 8.tif")
+npp9<-raster("2009/CASA-E2009 - 9.tif")
+npp10<-raster("2009/CASA-E2009 - 10.tif")
+npp11<-raster("2009/CASA-E2009 - 11.tif")
+npp12<-raster("2009/CASA-E2009 - 12.tif")
+
+#cumulated NPP
+spr2009<-npp3+npp4+npp5
+sum2009<-npp6+npp7+npp8
+aut2009<-npp9+npp10+npp11
+win2009<-npp12+npp1+npp2
+growth2009<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2009<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2009,filename="nppspr2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2009,filename="nppsum2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2009,filename="nppaut2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2009,filename="nppwin2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2009,filename="nppgrowth2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2009,filename="npp2009","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2009<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2009<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2009<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2009<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2009<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2009,filename="ESspr2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2009,filename="ESsum2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2009,filename="ESaut2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2009,filename="ESwin2009","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2009,filename="ESgrowth2009","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2010 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2010/CASA-E2010 - 1.tif")
+npp2<-raster("2010/CASA-E2010 - 2.tif")
+npp3<-raster("2010/CASA-E2010 - 3.tif")
+npp4<-raster("2010/CASA-E2010 - 4.tif")
+npp5<-raster("2010/CASA-E2010 - 5.tif")
+npp6<-raster("2010/CASA-E2010 - 6.tif")
+npp7<-raster("2010/CASA-E2010 - 7.tif")
+npp8<-raster("2010/CASA-E2010 - 8.tif")
+npp9<-raster("2010/CASA-E2010 - 9.tif")
+npp10<-raster("2010/CASA-E2010 - 10.tif")
+npp11<-raster("2010/CASA-E2010 - 11.tif")
+npp12<-raster("2010/CASA-E2010 - 12.tif")
+
+#cumulated NPP
+spr2010<-npp3+npp4+npp5
+sum2010<-npp6+npp7+npp8
+aut2010<-npp9+npp10+npp11
+win2010<-npp12+npp1+npp2
+growth2010<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2010<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2010,filename="nppspr2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2010,filename="nppsum2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2010,filename="nppaut2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2010,filename="nppwin2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2010,filename="nppgrowth2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2010,filename="npp2010","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2010<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2010<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2010<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2010<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2010<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2010,filename="ESspr2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2010,filename="ESsum2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2010,filename="ESaut2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2010,filename="ESwin2010","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2010,filename="ESgrowth2010","GTiff",overwrite=TRUE)
+
+
+rm(list = ls())
+
+######## 2011 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2011/CASA-E2011 - 1.tif")
+npp2<-raster("2011/CASA-E2011 - 2.tif")
+npp3<-raster("2011/CASA-E2011 - 3.tif")
+npp4<-raster("2011/CASA-E2011 - 4.tif")
+npp5<-raster("2011/CASA-E2011 - 5.tif")
+npp6<-raster("2011/CASA-E2011 - 6.tif")
+npp7<-raster("2011/CASA-E2011 - 7.tif")
+npp8<-raster("2011/CASA-E2011 - 8.tif")
+npp9<-raster("2011/CASA-E2011 - 9.tif")
+npp10<-raster("2011/CASA-E2011 - 10.tif")
+npp11<-raster("2011/CASA-E2011 - 11.tif")
+npp12<-raster("2011/CASA-E2011 - 12.tif")
+
+#cumulated NPP
+spr2011<-npp3+npp4+npp5
+sum2011<-npp6+npp7+npp8
+aut2011<-npp9+npp10+npp11
+win2011<-npp12+npp1+npp2
+growth2011<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2011<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2011,filename="nppspr2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2011,filename="nppsum2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2011,filename="nppaut2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2011,filename="nppwin2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2011,filename="nppgrowth2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2011,filename="npp2011","GTiff",overwrite=TRUE)
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2011<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2011<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2011<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2011<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2011<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2011,filename="ESspr2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2011,filename="ESsum2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2011,filename="ESaut2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2011,filename="ESwin2011","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2011,filename="ESgrowth2011","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2012 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2012/CASA-E2012 - 1.tif")
+npp2<-raster("2012/CASA-E2012 - 2.tif")
+npp3<-raster("2012/CASA-E2012 - 3.tif")
+npp4<-raster("2012/CASA-E2012 - 4.tif")
+npp5<-raster("2012/CASA-E2012 - 5.tif")
+npp6<-raster("2012/CASA-E2012 - 6.tif")
+npp7<-raster("2012/CASA-E2012 - 7.tif")
+npp8<-raster("2012/CASA-E2012 - 8.tif")
+npp9<-raster("2012/CASA-E2012 - 9.tif")
+npp10<-raster("2012/CASA-E2012 - 10.tif")
+npp11<-raster("2012/CASA-E2012 - 11.tif")
+npp12<-raster("2012/CASA-E2012 - 12.tif")
+
+#cumulated NPP
+spr2012<-npp3+npp4+npp5
+sum2012<-npp6+npp7+npp8
+aut2012<-npp9+npp10+npp11
+win2012<-npp12+npp1+npp2
+growth2012<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2012<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2012,filename="nppspr2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2012,filename="nppsum2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2012,filename="nppaut2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2012,filename="nppwin2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2012,filename="nppgrowth2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2012,filename="npp2012","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2012<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2012<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2012<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2012<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2012<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2012,filename="ESspr2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2012,filename="ESsum2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2012,filename="ESaut2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2012,filename="ESwin2012","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2012,filename="ESgrowth2012","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2013 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2013/CASA-E2013 - 1.tif")
+npp2<-raster("2013/CASA-E2013 - 2.tif")
+npp3<-raster("2013/CASA-E2013 - 3.tif")
+npp4<-raster("2013/CASA-E2013 - 4.tif")
+npp5<-raster("2013/CASA-E2013 - 5.tif")
+npp6<-raster("2013/CASA-E2013 - 6.tif")
+npp7<-raster("2013/CASA-E2013 - 7.tif")
+npp8<-raster("2013/CASA-E2013 - 8.tif")
+npp9<-raster("2013/CASA-E2013 - 9.tif")
+npp10<-raster("2013/CASA-E2013 - 10.tif")
+npp11<-raster("2013/CASA-E2013 - 11.tif")
+npp12<-raster("2013/CASA-E2013 - 12.tif")
+
+#cumulated NPP
+spr2013<-npp3+npp4+npp5
+sum2013<-npp6+npp7+npp8
+aut2013<-npp9+npp10+npp11
+win2013<-npp12+npp1+npp2
+growth2013<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2013<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2013,filename="nppspr2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2013,filename="nppsum2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2013,filename="nppaut2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2013,filename="nppwin2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2013,filename="nppgrowth2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2013,filename="npp2013","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2013<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2013<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2013<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2013<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2013<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2013,filename="ESspr2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2013,filename="ESsum2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2013,filename="ESaut2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2013,filename="ESwin2013","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2013,filename="ESgrowth2013","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2014 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2014/CASA-E2014 - 1.tif")
+npp2<-raster("2014/CASA-E2014 - 2.tif")
+npp3<-raster("2014/CASA-E2014 - 3.tif")
+npp4<-raster("2014/CASA-E2014 - 4.tif")
+npp5<-raster("2014/CASA-E2014 - 5.tif")
+npp6<-raster("2014/CASA-E2014 - 6.tif")
+npp7<-raster("2014/CASA-E2014 - 7.tif")
+npp8<-raster("2014/CASA-E2014 - 8.tif")
+npp9<-raster("2014/CASA-E2014 - 9.tif")
+npp10<-raster("2014/CASA-E2014 - 10.tif")
+npp11<-raster("2014/CASA-E2014 - 11.tif")
+npp12<-raster("2014/CASA-E2014 - 12.tif")
+
+#cumulated NPP
+spr2014<-npp3+npp4+npp5
+sum2014<-npp6+npp7+npp8
+aut2014<-npp9+npp10+npp11
+win2014<-npp12+npp1+npp2
+growth2014<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2014<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2014,filename="nppspr2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2014,filename="nppsum2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2014,filename="nppaut2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2014,filename="nppwin2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2014,filename="nppgrowth2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2014,filename="npp2014","GTiff",overwrite=TRUE)
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2014<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2014<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2014<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2014<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2014<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2014,filename="ESspr2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2014,filename="ESsum2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2014,filename="ESaut2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2014,filename="ESwin2014","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2014,filename="ESgrowth2014","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+######## 2015 ##############
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m")
+npp1<-raster("2015/CASA-E2015 - 1.tif")
+npp2<-raster("2015/CASA-E2015 - 2.tif")
+npp3<-raster("2015/CASA-E2015 - 3.tif")
+npp4<-raster("2015/CASA-E2015 - 4.tif")
+npp5<-raster("2015/CASA-E2015 - 5.tif")
+npp6<-raster("2015/CASA-E2015 - 6.tif")
+npp7<-raster("2015/CASA-E2015 - 7.tif")
+npp8<-raster("2015/CASA-E2015 - 8.tif")
+npp9<-raster("2015/CASA-E2015 - 9.tif")
+npp10<-raster("2015/CASA-E2015 - 10.tif")
+npp11<-raster("2015/CASA-E2015 - 11.tif")
+npp12<-raster("2015/CASA-E2015 - 12.tif")
+
+#cumulated NPP
+spr2015<-npp3+npp4+npp5
+sum2015<-npp6+npp7+npp8
+aut2015<-npp9+npp10+npp11
+win2015<-npp12+npp1+npp2
+growth2015<-npp4+npp5+npp6+npp7+npp8+npp9+npp10
+annual2015<-npp1+npp2+npp3+npp4+npp5+npp6+npp7+npp8+npp9+npp10+npp11+npp12
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+writeRaster(spr2015,filename="nppspr2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+writeRaster(sum2015,filename="nppsum2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+writeRaster(aut2015,filename="nppaut2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+writeRaster(win2015,filename="nppwin2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+writeRaster(growth2015,filename="nppgrowth2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+writeRaster(annual2015,filename="npp2015","GTiff",overwrite=TRUE)
+
+
+#ES per Year
+
+s1 <- stack(npp3,npp4,npp5)
+
+ESspr2015<-1/cv(s1)
+
+s2 <- stack(npp6,npp7,npp8)
+
+ESsum2015<-1/cv(s2)
+
+s3 <- stack(npp9,npp10,npp11)
+
+ESaut2015<-1/cv(s3)
+
+s4 <- stack(npp12,npp1,npp2)
+
+ESwin2015<-1/cv(s4)
+
+s5 <- stack(npp4,npp5,npp6,npp7,npp8,npp9,npp10)
+
+ESgrowth2015<-1/cv(s5)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_perYear")
+writeRaster(ESspr2015,filename="ESspr2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_perYear")
+writeRaster(ESsum2015,filename="ESsum2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_perYear")
+writeRaster(ESaut2015,filename="ESaut2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_perYear")
+writeRaster(ESwin2015,filename="ESwin2015","GTiff",overwrite=TRUE)
+
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_perYear")
+writeRaster(ESgrowth2015,filename="ESgrowth2015","GTiff",overwrite=TRUE)
+
+rm(list = ls())
+
+gc()
+
+##### ES newly estimated by cv() ##########
+#############################################################################
+
+# ES all years
+# ES spr
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_spr_cum")
+
+nppspr2000<-raster("nppspr2000.tif")
+nppspr2001<-raster("nppspr2001.tif")
+nppspr2002<-raster("nppspr2002.tif")
+nppspr2003<-raster("nppspr2003.tif")
+nppspr2004<-raster("nppspr2004.tif")
+nppspr2005<-raster("nppspr2005.tif")
+nppspr2006<-raster("nppspr2006.tif")
+nppspr2007<-raster("nppspr2007.tif")
+nppspr2008<-raster("nppspr2008.tif")
+nppspr2009<-raster("nppspr2009.tif")
+nppspr2010<-raster("nppspr2010.tif")
+nppspr2011<-raster("nppspr2011.tif")
+nppspr2012<-raster("nppspr2012.tif")
+nppspr2013<-raster("nppspr2013.tif")
+nppspr2014<-raster("nppspr2014.tif")
+nppspr2015<-raster("nppspr2015.tif")
+
+sspr <- stack(nppspr2000,nppspr2001,nppspr2002,nppspr2003,nppspr2004,nppspr2005,nppspr2006,nppspr2007,nppspr2008,nppspr2009,nppspr2010,nppspr2011,nppspr2012,nppspr2013,nppspr2014,nppspr2015)
+ESspr<- 1/cv(sspr)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_spr_allYear")
+writeRaster(ESspr,filename="ESspr","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES sum
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_sum_cum")
+
+nppsum2000<-raster("nppsum2000.tif")
+nppsum2001<-raster("nppsum2001.tif")
+nppsum2002<-raster("nppsum2002.tif")
+nppsum2003<-raster("nppsum2003.tif")
+nppsum2004<-raster("nppsum2004.tif")
+nppsum2005<-raster("nppsum2005.tif")
+nppsum2006<-raster("nppsum2006.tif")
+nppsum2007<-raster("nppsum2007.tif")
+nppsum2008<-raster("nppsum2008.tif")
+nppsum2009<-raster("nppsum2009.tif")
+nppsum2010<-raster("nppsum2010.tif")
+nppsum2011<-raster("nppsum2011.tif")
+nppsum2012<-raster("nppsum2012.tif")
+nppsum2013<-raster("nppsum2013.tif")
+nppsum2014<-raster("nppsum2014.tif")
+nppsum2015<-raster("nppsum2015.tif")
+
+ssum <- stack(nppsum2000,nppsum2001,nppsum2002,nppsum2003,nppsum2004,nppsum2005,nppsum2006,nppsum2007,nppsum2008,nppsum2009,nppsum2010,nppsum2011,nppsum2012,nppsum2013,nppsum2014,nppsum2015)
+ESsum<- 1/cv(ssum)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_sum_allYear")
+writeRaster(ESsum,filename="ESsum","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES aut
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_aut_cum")
+
+nppaut2000<-raster("nppaut2000.tif")
+nppaut2001<-raster("nppaut2001.tif")
+nppaut2002<-raster("nppaut2002.tif")
+nppaut2003<-raster("nppaut2003.tif")
+nppaut2004<-raster("nppaut2004.tif")
+nppaut2005<-raster("nppaut2005.tif")
+nppaut2006<-raster("nppaut2006.tif")
+nppaut2007<-raster("nppaut2007.tif")
+nppaut2008<-raster("nppaut2008.tif")
+nppaut2009<-raster("nppaut2009.tif")
+nppaut2010<-raster("nppaut2010.tif")
+nppaut2011<-raster("nppaut2011.tif")
+nppaut2012<-raster("nppaut2012.tif")
+nppaut2013<-raster("nppaut2013.tif")
+nppaut2014<-raster("nppaut2014.tif")
+nppaut2015<-raster("nppaut2015.tif")
+
+saut <- stack(nppaut2000,nppaut2001,nppaut2002,nppaut2003,nppaut2004,nppaut2005,nppaut2006,nppaut2007,nppaut2008,nppaut2009,nppaut2010,nppaut2011,nppaut2012,nppaut2013,nppaut2014,nppaut2015)
+ESaut<- 1/cv(saut)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_aut_allYear")
+writeRaster(ESaut,filename="ESaut","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES win
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_win_cum")
+
+nppwin2000<-raster("nppwin2000.tif")
+nppwin2001<-raster("nppwin2001.tif")
+nppwin2002<-raster("nppwin2002.tif")
+nppwin2003<-raster("nppwin2003.tif")
+nppwin2004<-raster("nppwin2004.tif")
+nppwin2005<-raster("nppwin2005.tif")
+nppwin2006<-raster("nppwin2006.tif")
+nppwin2007<-raster("nppwin2007.tif")
+nppwin2008<-raster("nppwin2008.tif")
+nppwin2009<-raster("nppwin2009.tif")
+nppwin2010<-raster("nppwin2010.tif")
+nppwin2011<-raster("nppwin2011.tif")
+nppwin2012<-raster("nppwin2012.tif")
+nppwin2013<-raster("nppwin2013.tif")
+nppwin2014<-raster("nppwin2014.tif")
+nppwin2015<-raster("nppwin2015.tif")
+
+swin <- stack(nppwin2000,nppwin2001,nppwin2002,nppwin2003,nppwin2004,nppwin2005,nppwin2006,nppwin2007,nppwin2008,nppwin2009,nppwin2010,nppwin2011,nppwin2012,nppwin2013,nppwin2014,nppwin2015)
+ESwin<- 1/cv(swin)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_win_allYear")
+writeRaster(ESwin,filename="ESwin","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES growth
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_growth_cum")
+
+nppgrowth2000<-raster("nppgrowth2000.tif")
+nppgrowth2001<-raster("nppgrowth2001.tif")
+nppgrowth2002<-raster("nppgrowth2002.tif")
+nppgrowth2003<-raster("nppgrowth2003.tif")
+nppgrowth2004<-raster("nppgrowth2004.tif")
+nppgrowth2005<-raster("nppgrowth2005.tif")
+nppgrowth2006<-raster("nppgrowth2006.tif")
+nppgrowth2007<-raster("nppgrowth2007.tif")
+nppgrowth2008<-raster("nppgrowth2008.tif")
+nppgrowth2009<-raster("nppgrowth2009.tif")
+nppgrowth2010<-raster("nppgrowth2010.tif")
+nppgrowth2011<-raster("nppgrowth2011.tif")
+nppgrowth2012<-raster("nppgrowth2012.tif")
+nppgrowth2013<-raster("nppgrowth2013.tif")
+nppgrowth2014<-raster("nppgrowth2014.tif")
+nppgrowth2015<-raster("nppgrowth2015.tif")
+
+sgrowth <- stack(nppgrowth2000,nppgrowth2001,nppgrowth2002,nppgrowth2003,nppgrowth2004,nppgrowth2005,nppgrowth2006,nppgrowth2007,nppgrowth2008,nppgrowth2009,nppgrowth2010,nppgrowth2011,nppgrowth2012,nppgrowth2013,nppgrowth2014,nppgrowth2015)
+ESgrowth<- 1/cv(sgrowth)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_growth_allYear")
+writeRaster(ESgrowth,filename="ESgrowth","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+# ES 
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/NPP_annual_cum")
+
+npp2000<-raster("npp2000.tif")
+npp2001<-raster("npp2001.tif")
+npp2002<-raster("npp2002.tif")
+npp2003<-raster("npp2003.tif")
+npp2004<-raster("npp2004.tif")
+npp2005<-raster("npp2005.tif")
+npp2006<-raster("npp2006.tif")
+npp2007<-raster("npp2007.tif")
+npp2008<-raster("npp2008.tif")
+npp2009<-raster("npp2009.tif")
+npp2010<-raster("npp2010.tif")
+npp2011<-raster("npp2011.tif")
+npp2012<-raster("npp2012.tif")
+npp2013<-raster("npp2013.tif")
+npp2014<-raster("npp2014.tif")
+npp2015<-raster("npp2015.tif")
+
+s <- stack(npp2000,npp2001,npp2002,npp2003,npp2004,npp2005,npp2006,npp2007,npp2008,npp2009,npp2010,npp2011,npp2012,npp2013,npp2014,npp2015)
+ES<-1/cv(s)
+setwd("D:/CASA/data_proceed/NPP-OUT/NPP_250m/ES_annual_allYear")
+writeRaster(ES,filename="ES","GTiff",overwrite=TRUE)
+rm(list = ls())
+
+gc()
+#end
+#####################
